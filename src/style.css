@@ -1,0 +1,156 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --color-primary: #3f51b5;
+  --color-accent: #ff5722;
+  --grid-line: #cccccc;
+  --hour-label: #666666;
+  --text-primary: #212121;
+  --text-secondary: #757575;
+  --selected-overlay: rgba(51, 181, 229, 0.5);
+  --high-priority: #6b21a8;
+  --danger: #d32f2f;
+  --hour-height: 64px;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: 'Roboto', 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  background: #fafafa;
+  color: var(--text-primary);
+  overscroll-behavior: none;
+}
+
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+input,
+textarea {
+  font-family: inherit;
+}
+
+/* 通用弹层遮罩 */
+.mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 100;
+}
+
+.dialog {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  z-index: 101;
+  min-width: 280px;
+  max-width: 90vw;
+  padding: 20px;
+}
+
+.dialog h3 {
+  font-size: 18px;
+  font-weight: 500;
+  margin-bottom: 16px;
+}
+
+.dialog .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dialog label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-width: 64px;
+}
+
+.dialog input[type='text'],
+.dialog input[type='time'],
+.dialog input[type='number'] {
+  flex: 1;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 14px;
+  outline: none;
+  min-width: 0;
+}
+
+.dialog input:focus {
+  border-color: var(--color-primary);
+}
+
+.dialog .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.btn:hover {
+  background: rgba(63, 81, 181, 0.08);
+}
+
+.btn.danger {
+  color: var(--danger);
+}
+
+.btn.danger:hover {
+  background: rgba(211, 47, 47, 0.08);
+}
+
+.btn.primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.btn.primary:hover {
+  background: #303f9f;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 120px;
+  transform: translateX(-50%);
+  background: rgba(50, 50, 50, 0.92);
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 4px;
+  font-size: 14px;
+  z-index: 300;
+  max-width: 80vw;
+  text-align: center;
+}
