@@ -43,7 +43,8 @@ function fmtDate(d) {
 
 function defaultSlotMinute() {
   const now = new Date()
-  const cur = Math.floor(now.getMinutes() / 30) * 30
+  // 按"天内分钟偏移"取当前 30 分钟档（之前只取了分钟数、漏了小时，恒为 00:00/00:30）
+  const cur = Math.floor((now.getHours() * 60 + now.getMinutes()) / 30) * 30
   // 与安卓端"默认建在当前30分钟"设置一致：显示今天时用当前时段
   return cur
 }
@@ -138,16 +139,27 @@ function goDay(delta) {
 }
 
 // ---------- 任务操作 ----------
+// 乐观更新策略：先在本地渲染改动（UI 立即响应），再异步同步到手机；
+// 无论成败最后都 fetchDay 以手机本地库为准对账（失败时即回滚）。
 
-async function doAction(fn, successText) {
+function applyLocal(id, patch) {
+  const ev = events.value.find((e) => e.id === id)
+  if (ev) Object.assign(ev, patch)
+}
+
+function removeLocal(id) {
+  events.value = events.value.filter((e) => e.id !== id)
+}
+
+async function doAction(fn, successText, optimistic) {
+  if (optimistic) optimistic()
   try {
     await fn()
     if (successText) showToast(successText)
-    await fetchDay()
   } catch (e) {
     showToast(e.message)
-    await fetchDay()
   }
+  fetchDay() // 对账：以手机端为准（成功校准细节，失败回滚）
 }
 
 function onCtxAction({ action, event }) {
@@ -158,35 +170,51 @@ function onCtxAction({ action, event }) {
       editTarget.value = event
       break
     case 'move-today':
-      doAction(() => sync.update(id, { allDay: true, startDayOffset: 0 }), '已移动到今天')
+      doAction(
+        () => sync.update(id, { allDay: true, startDayOffset: 0 }),
+        '已移动到今天',
+        () => applyLocal(id, { allDay: true, flexible: false }),
+      )
       break
     case 'move-tomorrow':
-      doAction(() => sync.update(id, { allDay: true, startDayOffset: 1 }), '已移动到明天')
+      doAction(
+        () => sync.update(id, { allDay: true, startDayOffset: 1 }),
+        '已移动到明天',
+        () => removeLocal(id), // 移到明天：今天视图直接消失
+      )
       break
     case 'toggle-flexible':
       doAction(
         () => sync.update(id, { flexible: !event.flexible }),
-        event.flexible ? '已取消弹性任务' : '已设为弹性任务'
+        event.flexible ? '已取消弹性任务' : '已设为弹性任务',
+        () => applyLocal(id, { flexible: !event.flexible }),
       )
       break
     case 'toggle-priority':
       doAction(
         () => sync.update(id, { priority: event.priority === 1 ? 0 : 1 }),
-        event.priority === 1 ? '已取消高优先级' : '已设为高优先级'
+        event.priority === 1 ? '已取消高优先级' : '已设为高优先级',
+        () => applyLocal(id, { priority: event.priority === 1 ? 0 : 1 }),
       )
       break
     case 'fill':
-      doAction(() => sync.update(id, { flexible: true }), '已补满')
+      doAction(() => sync.update(id, { flexible: true }), '已补满', () =>
+        applyLocal(id, { flexible: true }),
+      )
       break
     case 'delete':
-      doAction(() => sync.remove(id), '已删除')
+      doAction(() => sync.remove(id), '已删除', () => removeLocal(id))
       break
   }
 }
 
 function onAdjustDuration(event, minutes) {
   ctxMenu.value = null
-  doAction(() => sync.update(event.id, { colSpan: Math.round(minutes / 2.5) }), `已调整为${minutes}分钟`)
+  doAction(
+    () => sync.update(event.id, { colSpan: Math.round(minutes / 2.5) }),
+    `已调整为${minutes}分钟`,
+    () => applyLocal(event.id, { colSpan: Math.round(minutes / 2.5) }),
+  )
 }
 
 // 双击任务：弹编辑弹窗（可修改/删除）
@@ -199,14 +227,15 @@ function onDeleteFromDialog() {
   const event = editTarget.value
   editTarget.value = null
   if (!event) return
-  doAction(() => sync.remove(event.id), '已删除')
+  doAction(() => sync.remove(event.id), '已删除', () => removeLocal(event.id))
 }
 
 function onEditSave(payload) {
   const event = editTarget.value
   editTarget.value = null
   if (!event) return
-  doAction(() => sync.update(event.id, payload), '已保存')
+  // payload 字段与事件字段同名（title/priority/flexible/colSpan/start/end），直接本地套用
+  doAction(() => sync.update(event.id, payload), '已保存', () => applyLocal(event.id, payload))
 }
 
 // 单击任务：未选中则选中；已选中则把选中的任务移动到该任务所在时段
@@ -248,7 +277,8 @@ function moveSelectedTo(targetStart) {
   if (delta === 0) return
   doAction(
     () => sync.update(ev.id, { start: ev.start + delta, end: ev.end + delta }),
-    '已移动'
+    '已移动',
+    () => applyLocal(ev.id, { start: ev.start + delta, end: ev.end + delta }),
   )
 }
 
@@ -273,6 +303,23 @@ async function onCreate({ title, priority, flexible, minutes }) {
   if (createAtFront.value) {
     payload.firstInSlot = true
   }
+  // 乐观占位：立即在本地渲染（temp 事件），不等手机响应；fetchDay 回来后替换为真实数据
+  const tempId = `tmp-${Date.now()}`
+  events.value = [
+    ...events.value,
+    {
+      id: tempId,
+      title,
+      start: payload.start,
+      end: payload.end,
+      allDay: false,
+      priority,
+      flexible,
+      // 弹性任务安卓会算成占满剩余空间；普通任务按所选分钟宽度近似
+      colSpan: flexible ? 12 : payload.colSpan,
+      sortId: createAtFront.value ? -1 : Number.MAX_SAFE_INTEGER,
+    },
+  ]
   try {
     await sync.add(payload)
     showToast('已创建')
@@ -282,7 +329,7 @@ async function onCreate({ title, priority, flexible, minutes }) {
   } catch (e) {
     showToast(e.message)
   }
-  await fetchDay()
+  fetchDay() // 对账：用真实数据（含真实 sortId/宽度/颜色）替换占位
 }
 
 // 创建后自动跳到下一个还有空位的时段（今天范围内）
