@@ -1,11 +1,30 @@
 // WebRTC DataChannel 封装：网页永远是 offerer，安卓是 answerer
-// 不实现 TURN，只有 STUN，打洞失败由上层提示连接失败
+//
+// ICE 候选尝试顺序由协议栈按候选类型自动排序（RFC 8445 type preference）：
+//   1. host      本机内网/公网 IPv6 直连候选，同 WiFi 或有公网 v6 时最快
+//   2. srflx     STUN 探测出的公网映射，UDP 打洞（需双方都是锥型 NAT）
+//   3. relay     TURN 中继兜底（UDP 80 → TCP 443 → TLS 443 依次放宽防火墙）
+// 所以只需把三类服务器都配上，顺序无需自己控制；
+// 走到 relay 不再是 P2P，但流量仍经 DTLS 端到端加密，中继方看不到内容。
 
-export const STUN_SERVERS = [
-  'stun:stun.miwifi.com:3478',
-  'stun:stun.chat.bilibili.com:3478',
-  'stun:stun.cloudflare.com:3478',
-  'stun:stun.l.google.com:19302',
+/** TURN 中继账号（Open Relay 公共免费服务，20GB/月；可换成自建 coturn 的地址和凭据） */
+const TURN_USER = 'openrelayproject'
+const TURN_PASS = 'openrelayproject'
+
+export const ICE_SERVERS = [
+  // srflx：STUN 只用来发现公网映射，不中转数据
+  {
+    urls: [
+      'stun:stun.miwifi.com:3478',
+      'stun:stun.chat.bilibili.com:3478',
+      'stun:stun.cloudflare.com:3478',
+      'stun:stun.l.google.com:19302',
+    ],
+  },
+  // relay：TURN 兜底，UDP 打不通时走 TCP/TLS 443（企业防火墙一般只放 443）
+  { urls: 'turn:openrelay.metered.ca:80', username: TURN_USER, credential: TURN_PASS },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: TURN_USER, credential: TURN_PASS },
+  { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: TURN_USER, credential: TURN_PASS },
 ]
 
 /**
@@ -48,7 +67,7 @@ export class RtcLink {
   createPeer() {
     if (this.pc) return this.pc
     const pc = new RTCPeerConnection({
-      iceServers: STUN_SERVERS.map((url) => ({ urls: [url] })),
+      iceServers: ICE_SERVERS,
     })
     this.pc = pc
     pc.onicecandidate = (ev) => {

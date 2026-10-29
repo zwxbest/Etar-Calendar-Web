@@ -16,7 +16,9 @@ Vue 3 + Vite 实现的 Etar 日历网页端，复刻 App 的**天视图**：
 
 ## 底层
 
-- 数据通道：WebRTC DataChannel（纯数据，无音视频），STUN 打洞，不走 TURN
+- 数据通道：WebRTC DataChannel（纯数据，无音视频）。ICE 按候选类型自动优先：
+  内网/IPv6 直连 → STUN 打洞（UDP）→ TURN 中继兜底（UDP 80 / TCP 443 / TLS 443，
+  Open Relay 公共服务，凭据在 `src/lib/rtc.js`，可换自建 coturn）。绝大多数情况仍走 P2P
 - 信令：MQTT，公共 broker `broker.emqx.io`（网页 wss 8084 / 安卓 ssl 8883），
   只交换 SDP/ICE，主题划分与 join/here/leave/signal 报文见 `MQTT信令协议.md`；
   原 `../signaling/` Worker 已作废
