@@ -179,13 +179,47 @@ function goDay(delta) {
 // 乐观更新策略：先在本地渲染改动（UI 立即响应），再异步同步到手机；
 // 无论成败最后都 fetchDay 以手机本地库为准对账（失败时即回滚）。
 
+const SLOT_COL_SPAN = 12 // 一个 30 分钟时段 = 12 个宽度单位（1 单位 = 2.5 分钟），与安卓一致
+
+/** 事件起始毫秒 → 所属 30 分钟时段起点（本地日对齐，与 DayView.slotOf 一致） */
+function slotStartOf(ms) {
+  const d = new Date(ms)
+  const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  return ms - ((ms - dayStart) % (30 * 60 * 1000))
+}
+
+/** 本地重算某时段弹性任务的宽度 = 时段剩余空间。
+ *  公式同安卓 FlexibleTaskHelper.rebalance：弹性宽度 = 12 - 其它任务占用（至少 1 单位）。
+ *  乐观更新后立即调用，普通任务改短时弹性任务当场扩宽，不用等安卓回包再对账。 */
+function expandFlexible(startMs) {
+  const slot = slotStartOf(startMs)
+  const inSlot = events.value.filter((e) => !e.allDay && slotStartOf(e.start) === slot)
+  const flex = inSlot.find((e) => e.flexible)
+  if (!flex) return
+  const used = inSlot.reduce((s, e) => (e === flex ? s : s + (e.colSpan || 1)), 0)
+  const width = Math.max(SLOT_COL_SPAN - used, 1)
+  if (flex.colSpan !== width) flex.colSpan = width
+}
+
 function applyLocal(id, patch) {
   const ev = events.value.find((e) => e.id === id)
-  if (ev) Object.assign(ev, patch)
+  if (!ev) return
+  const oldStart = ev.start
+  Object.assign(ev, patch)
+  // 宽度/弹性标记变了 → 本时段弹性任务立即按剩余空间重算
+  if ('colSpan' in patch || 'flexible' in patch) expandFlexible(ev.start)
+  // 换了时段 → 旧时段腾出的空间、新时段被占用后的剩余，两边都重算
+  if ('start' in patch && ev.start !== oldStart) {
+    expandFlexible(oldStart)
+    expandFlexible(ev.start)
+  }
 }
 
 function removeLocal(id) {
+  const ev = events.value.find((e) => e.id === id)
   events.value = events.value.filter((e) => e.id !== id)
+  // 删除腾出空间：弹性任务当场扩宽（安卓删除后也会 rebalance，两边一致）
+  if (ev && !ev.allDay) expandFlexible(ev.start)
 }
 
 async function doAction(fn, successText, optimistic) {
