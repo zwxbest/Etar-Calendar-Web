@@ -57,14 +57,21 @@ const layoutEvents = computed(() => {
 })
 
 function onGridClick(ev) {
-  if (ev.target !== gridEl.value && !ev.target.classList.contains('grid-inner') && !ev.target.classList.contains('hour-line')) {
-    return
-  }
   const rect = gridEl.value.getBoundingClientRect()
+  const onRuler = ev.clientX - rect.left < 48 // 最左侧时间刻度列
+  const t = ev.target
+  const onGridArea =
+    t === gridEl.value ||
+    t.classList.contains('grid-inner') ||
+    t.classList.contains('events-layer') ||
+    t.classList.contains('hour-line') ||
+    t.classList.contains('hour-label')
+  if (!onRuler && !onGridArea) return
   const y = ev.clientY - rect.top + gridEl.value.scrollTop
-  const minute = Math.floor((y / HOUR_HEIGHT) * 60 / 30) * 30
+  const minute = Math.floor(((y / HOUR_HEIGHT) * 60) / 30) * 30
   if (minute < 0 || minute >= 24 * 60) return
-  emit('slot-click', minute)
+  // 第二个参数标记"来自时间刻度"：该时段创建的任务插到时段第一位（协议 firstInSlot）
+  emit('slot-click', minute, onRuler)
 }
 
 function formatMinutes(colSpan) {
@@ -100,23 +107,25 @@ function formatMinutes(colSpan) {
         <span class="hour-label">{{ String(h - 1).padStart(2, '0') }}:00</span>
       </div>
 
-      <!-- 任务块 -->
-      <EventBlock
-        v-for="e in layoutEvents"
-        :key="e.id"
-        :event="e"
-        :style="{
-          top: e.top + 'px',
-          height: e.height + 'px',
-          left: `calc(${(e.column / 12) * 100}% + 48px)`,
-          width: `calc(${(e.colSpan / 12) * 100}% - 50px)`,
-        }"
-        :selected="e.id === selectedId"
-        :minutes-text="formatMinutes(e.colSpan)"
-        @click.stop="emit('event-click', e)"
-        @ctxmenu.prevent.stop="emit('event-ctx', e, $event.clientX, $event.clientY)"
-        @dblclick.stop="emit('event-dblclick', e)"
-      />
+      <!-- 任务块：独立事件层从刻度右侧开始，列间距 0.5em（半个字宽） -->
+      <div class="events-layer">
+        <EventBlock
+          v-for="e in layoutEvents"
+          :key="e.id"
+          :event="e"
+          :style="{
+            top: e.top + 'px',
+            height: e.height + 'px',
+            left: `${(e.column / 12) * 100}%`,
+            width: `calc(${(e.colSpan / 12) * 100}% - 0.5em)`,
+          }"
+          :selected="e.id === selectedId"
+          :minutes-text="formatMinutes(e.colSpan)"
+          @click.stop="emit('event-click', e)"
+          @ctxmenu.prevent.stop="emit('event-ctx', e, $event.clientX, $event.clientY)"
+          @dblclick.stop="emit('event-dblclick', e)"
+        />
+      </div>
 
       <!-- 当前时间线 -->
       <div
@@ -140,6 +149,17 @@ function formatMinutes(colSpan) {
   position: relative;
   min-height: 100%;
   padding-left: 48px;
+}
+
+/* 事件层：绝对定位容器从时间刻度右侧开始，任务块按纯百分比排布，
+   列间只留 0.5em（半个字宽）的缝；此前每列都叠加 48px 刻度偏移导致间隔过宽 */
+.events-layer {
+  position: absolute;
+  left: 48px;
+  right: 0;
+  top: 0;
+  height: 100%;
+  z-index: 2;
 }
 
 .hour-line {

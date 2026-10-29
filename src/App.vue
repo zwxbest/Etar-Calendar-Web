@@ -27,6 +27,8 @@ let toastTimer = null
 
 // 创建栏目标时段（分钟偏移 0/30），默认按"当前/下一个30分钟"
 const createSlot = ref(defaultSlotMinute())
+// 目标时段是否插到第一位（点时间刻度设置时段时为 true，见 DayView ruler-click）
+const createAtFront = ref(false)
 
 function todayStr() {
   const d = new Date()
@@ -187,8 +189,16 @@ function onAdjustDuration(event, minutes) {
   doAction(() => sync.update(event.id, { colSpan: Math.round(minutes / 2.5) }), `已调整为${minutes}分钟`)
 }
 
-function onDeleteEvent(event) {
+// 双击任务：弹编辑弹窗（可修改/删除）
+function onEventDblclick(event) {
   ctxMenu.value = null
+  editTarget.value = event
+}
+
+function onDeleteFromDialog() {
+  const event = editTarget.value
+  editTarget.value = null
+  if (!event) return
   doAction(() => sync.remove(event.id), '已删除')
 }
 
@@ -214,12 +224,19 @@ function onEventClick(event) {
 }
 
 // 单击空白时段：已选中任务则移动过去，否则设为创建目标时段
-function onSlotClick(minuteOffset) {
+// 点最左侧时间刻度：总是切换创建目标时段，且在该时段创建的任务插到第一位（firstInSlot）
+function onSlotClick(minuteOffset, fromRuler) {
   ctxMenu.value = null
+  if (fromRuler) {
+    createSlot.value = minuteOffset
+    createAtFront.value = true
+    return
+  }
   if (selectedId.value != null) {
     moveSelectedTo(slotStartMillis(currentDate.value, minuteOffset))
   } else {
     createSlot.value = minuteOffset
+    createAtFront.value = false
   }
 }
 
@@ -251,11 +268,17 @@ async function onCreate({ title, priority, flexible, minutes }) {
     flexible,
     colSpan: flexible ? 0 : Math.round(minutes / 2.5),
   }
+  // 插入位置：点时间刻度设的目标时段 → 插到该时段第一位（firstInSlot，
+  // 安卓端按 sortId 排列，见 EventBridge.computeSortId；默认则普通任务排弹性任务前、无弹性追加末尾）
+  if (createAtFront.value) {
+    payload.firstInSlot = true
+  }
   try {
     await sync.add(payload)
     showToast('已创建')
     // 若建在空时段会占满，创建栏默认项要跟着变
     createSlot.value = nextFreshSlot()
+    createAtFront.value = false
   } catch (e) {
     showToast(e.message)
   }
@@ -305,7 +328,7 @@ function closePair() {
     :create-slot="createSlot"
     @event-click="onEventClick"
     @event-ctx="onEventCtx"
-    @event-dblclick="onDeleteEvent"
+    @event-dblclick="onEventDblclick"
     @slot-click="onSlotClick"
     @adjust-duration="onAdjustDuration"
   />
@@ -324,7 +347,13 @@ function closePair() {
     @close="ctxMenu = null"
   />
 
-  <EditDialog v-if="editTarget" :event="editTarget" @save="onEditSave" @close="editTarget = null" />
+  <EditDialog
+    v-if="editTarget"
+    :event="editTarget"
+    @save="onEditSave"
+    @delete="onDeleteFromDialog"
+    @close="editTarget = null"
+  />
 
   <PairDialog
     v-if="showPair"

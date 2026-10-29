@@ -223,11 +223,13 @@ export class SyncClient {
   }
 
   update(id, payload) {
-    return this.request({ type: 'update', id: String(id), payload })
+    // 任务 id 用独立字段 eventId：request() 会统一给 obj.id 盖请求关联号，
+    // 之前复用 id 字段导致安卓端拿到的是 "sid-1" 之类无法解析的值（delete/update 一直失败）
+    return this.request({ type: 'update', eventId: String(id), payload })
   }
 
   remove(id) {
-    return this.request({ type: 'delete', id: String(id) })
+    return this.request({ type: 'delete', eventId: String(id) })
   }
 
   /** 心跳：周期 ping 保活 + 看门狗监测入站数据，90s 无回包判定通道死亡 */

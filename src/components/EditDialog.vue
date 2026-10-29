@@ -5,12 +5,13 @@ import { ref, computed } from 'vue'
 const props = defineProps({
   event: { type: Object, required: true },
 })
-const emit = defineEmits(['save', 'close'])
+const emit = defineEmits(['save', 'close', 'delete'])
 
 const title = ref(props.event.title)
 const priority = ref(props.event.priority === 1 ? 1 : 0)
 const flexible = ref(!!props.event.flexible)
 const colSpan = ref(props.event.colSpan || 1)
+const delConfirm = ref(false) // 删除两步确认：第一次点变"确认删除?"，再点才删
 
 const MINUTE_OPTIONS = [2, 5, 10, 15, 20, 25]
 
@@ -56,6 +57,14 @@ function save() {
   }
   emit('save', payload)
 }
+
+function onDelete() {
+  if (!delConfirm.value) {
+    delConfirm.value = true
+    return
+  }
+  emit('delete')
+}
 </script>
 
 <template>
@@ -94,6 +103,9 @@ function save() {
       </div>
       <div class="hint" v-if="!flexible">当前宽度 {{ currentMinutes() }} 分钟</div>
       <div class="actions">
+        <button class="btn danger" :class="{ confirm: delConfirm }" @click="onDelete">
+          {{ delConfirm ? '确认删除?' : '删除' }}
+        </button>
         <button class="btn" @click="$emit('close')">取消</button>
         <button class="btn primary" @click="save">保存</button>
       </div>
@@ -127,5 +139,14 @@ function save() {
   font-size: 12px;
   color: var(--text-secondary);
   margin-left: 72px;
+}
+
+.btn.danger {
+  margin-right: auto; /* 删除按钮放最左，与保存/取消分开 */
+}
+
+.btn.danger.confirm {
+  background: var(--danger);
+  color: #fff;
 }
 </style>
