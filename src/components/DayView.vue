@@ -17,7 +17,8 @@ const MIN_EVENT_HEIGHT = 22
 const ZOOM_MIN = 0.4
 const ZOOM_MAX = 4 // 最大放大 4x（在 1x 基础上再放大两倍）
 
-const zoom = ref(1)
+// 初始即最大放大倍数（打开/刷新就是 4x），ctrl+滚轮可再缩小
+const zoom = ref(ZOOM_MAX)
 const HOUR_HEIGHT = computed(() => Math.round(BASE_HOUR_HEIGHT * zoom.value))
 
 const gridEl = ref(null)
