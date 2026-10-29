@@ -317,18 +317,19 @@ function formatMinutes(colSpan) {
   background: #b01b1b;
 }
 
-/* 定位到现在按钮：悬浮在网格右上角，不随内容滚动 */
+/* 定位到现在按钮：悬浮在网格右侧垂直居中，不随内容滚动 */
 .now-btn {
   position: absolute;
   right: 14px;
-  top: 14px;
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 6;
-  padding: 6px 14px;
+  padding: 12px 28px;
   border-radius: 999px;
   border: 1px solid var(--grid-line);
   background: #fff;
   color: var(--color-primary);
-  font-size: 13px;
+  font-size: 26px;
   font-weight: 500;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
   cursor: pointer;
