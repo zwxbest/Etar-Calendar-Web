@@ -26,6 +26,9 @@ import { loadOrCreatePeerId, DEFAULT_SIGNAL_URL } from './store.js'
 
 const HEARTBEAT_INTERVAL = 25000
 const RESPONSE_TIMEOUT = 15000
+// 心跳丢失判定：超过此时长没有任何入站数据（含 pong）→ 通道死亡（容忍浏览器后台节流到 1 次/分钟）
+const DATA_DEAD_MS = 90000
+const DEAD_CHECK_INTERVAL = 30000
 // MQTT 数据无回包多久后升级 WebRTC（用户定义：1 分钟）
 const RTC_ESCALATE_MS = 60000
 
@@ -43,8 +46,10 @@ export class SyncClient {
     this.sid = Math.random().toString(16).slice(2, 6)
     this.dataOk = false // 任一传输通道成功收发过数据
     this.transport = null // 'mqtt' | 'rtc'，当前数据通道
+    this.lastInboundAt = 0 // 最近一次收到任何数据（含 pong）的时刻，心跳看门狗用
     this.escalateTimer = null
     this.heartbeatTimer = null
+    this.deadTimer = null
     this.watchdogTimer = null
     this.handlers = { status: [], push: [], message: [] }
     this.wantConnection = false
@@ -101,6 +106,7 @@ export class SyncClient {
     this.wantConnection = true
     this.dataOk = false
     this.transport = null
+    this.lastInboundAt = 0
     clearTimeout(this.escalateTimer)
     this.escalateTimer = null
     this.teardownRtc()
@@ -228,6 +234,8 @@ export class SyncClient {
     } catch (e) {
       return
     }
+    // 任何入站数据（含 pong）都证明通道活着
+    this.lastInboundAt = Date.now()
     // 任一通道成功收到数据 → 标记数据已通、取消 RTC 升级
     const firstOk = !this.dataOk
     this.dataOk = true
@@ -242,6 +250,11 @@ export class SyncClient {
       this.transport = via
     }
     if (msg.type === 'pong') return
+    // 安卓侧也会周期 ping（对称心跳，协议 §9.3），这里必须回 pong
+    if (msg.type === 'ping') {
+      this.sendObj({ type: 'pong', id: msg.id })
+      return
+    }
     console.info(`[sync] 收到 ${msg.type}${msg.day ? `(${msg.day})` : ''} [${via}]${firstOk ? '（数据通道首通）' : ''}`)
     if (msg.type === 'push_change') {
       this.emit('push', msg.payload || {})
@@ -314,17 +327,33 @@ export class SyncClient {
     return this.request({ type: 'delete', id: String(id) })
   }
 
+  /** 心跳：周期 ping 保活 + 看门狗监测入站数据，90s 无回包判定通道死亡 */
   startHeartbeat() {
     this.stopHeartbeat()
     this.heartbeatTimer = setInterval(() => {
       this.sendObj({ type: 'ping' })
     }, HEARTBEAT_INTERVAL)
+    this.deadTimer = setInterval(() => {
+      if (this.status !== 'connected' || !this.lastInboundAt) return
+      const idle = Date.now() - this.lastInboundAt
+      if (idle > DATA_DEAD_MS) {
+        console.warn(`[sync] 数据通道 ${Math.round(idle / 1000)}s 无任何回包，判定通道死亡，回落 connecting 并重试`)
+        this.dataOk = false
+        this.stopHeartbeat()
+        this.setStatus('connecting')
+        this.armEscalation() // 信令还在的话 60s 后重试 RTC
+      }
+    }, DEAD_CHECK_INTERVAL)
   }
 
   stopHeartbeat() {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
+    }
+    if (this.deadTimer) {
+      clearInterval(this.deadTimer)
+      this.deadTimer = null
     }
   }
 
