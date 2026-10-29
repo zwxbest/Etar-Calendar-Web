@@ -17,6 +17,8 @@ const statusText = computed(
   () => ({ idle: '未连接', connecting: '连接中', connected: '已连通', offline: '离线' })[status.value]
 )
 const events = ref([])
+// 最近一次对账见过的日历色（会话内记忆），供创建占位兜底，见 fetchDay / submitCreate
+let lastKnownColor = null
 // 展示顺序提示：{ [任务id]: 锚点id } = 排到锚点前面（纯网页端规则，见 store.js）
 const orderHint = ref(loadOrderHint())
 const currentDate = ref(todayStr())
@@ -106,7 +108,11 @@ async function fetchDay() {
   // 首个请求由对端在场事件触发（此时还未 connected），其余场景维持原条件
   if (status.value !== 'connected' && !sync.ready()) return
   try {
-    events.value = await sync.fetchDay(currentDate.value)
+    const list = await sync.fetchDay(currentDate.value)
+    // 记住最近见过的日历色：当天没有其他任务时，创建占位也能用它，避免回落默认蓝
+    const colored = list.find((e) => typeof e.color === 'number')
+    if (colored) lastKnownColor = colored.color
+    events.value = list
     selectedId.value = null
   } catch (e) {
     showToast(e.message)
@@ -319,11 +325,16 @@ function onEventCtx(event, x, y) {
 /** 创建（乐观占位 + 异步同步 + fetch 对账），供创建栏与刻度快捷弹窗共用 */
 async function submitCreate(payload, atFront) {
   const tempId = `tmp-${Date.now()}`
+  // 占位沿用当天已有任务的日历色（近似值，fetch 对账后校准），
+  // 否则缺失 color 会走 EventBlock 的默认蓝兜底，对账后瞬间变真实颜色造成"闪一下"
+  const refEvent = events.value.find((e) => typeof e.color === 'number')
+  const refColor = refEvent ? refEvent.color : lastKnownColor
   events.value = [
     ...events.value,
     {
       id: tempId,
       title: payload.title,
+      color: refColor != null ? refColor : undefined,
       start: payload.start,
       end: payload.end,
       allDay: false,
