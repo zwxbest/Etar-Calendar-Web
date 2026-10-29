@@ -1,12 +1,11 @@
-// 旁观者：订阅房间的全部流量（etar/cal/<T>/#），只打印不发送
-// 用法: node spy.mjs <pairCode>
+// 旁观者：订阅房间的全部流量（etar/cal/<T>/#），只打印不发�?// 用法: node spy.mjs <pairCode>
 import { createHash } from 'crypto'
 const code = process.argv[2] || '548443'
 const token = createHash('sha256').update(`etar-sync-v1:${code}`).digest('hex').slice(0, 16)
 console.log(`room token=${token}, spying on etar/cal/${token}/#`)
 
 const mqtt = (await import('mqtt')).default
-const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+const client = mqtt.connect('wss://broker-cn.emqx.io:8084/mqtt', {
   clientId: 'etar-spy-' + Math.random().toString(16).slice(2, 10),
   clean: true,
   keepalive: 30,
@@ -16,7 +15,7 @@ client.on('connect', () => {
   console.log('[spy] connected, subscribing etar/cal/' + token + '/#')
   client.subscribe(`etar/cal/${token}/#`, { qos: 1 }, (err) => {
     if (err) return console.error('[spy] subscribe failed:', err.message)
-    console.log('[spy] subscribed, watching…')
+    console.log('[spy] subscribed, watching�?)
   })
 })
 

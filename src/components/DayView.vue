@@ -13,7 +13,7 @@ const emit = defineEmits(['event-click', 'event-ctx', 'event-dblclick', 'slot-cl
 const BASE_HOUR_HEIGHT = 64 // px，基准小时高度
 const MIN_EVENT_HEIGHT = 22
 const ZOOM_MIN = 0.4
-const ZOOM_MAX = 2
+const ZOOM_MAX = 4 // 最大放大 4x（在 1x 基础上再放大两倍）
 
 const zoom = ref(1)
 const HOUR_HEIGHT = computed(() => Math.round(BASE_HOUR_HEIGHT * zoom.value))
@@ -30,12 +30,35 @@ function measureAllday() {
 }
 watch(() => props.events, () => nextTick(measureAllday), { flush: 'post' })
 
-/** ctrl+滚轮：拦截浏览器整页缩放，只缩放中间时间任务区域（时间密度 0.4x~2x） */
+/** ctrl+滚轮：拦截浏览器整页缩放，只缩放中间时间任务区域（时间密度 0.4x~4x）。
+ *  以鼠标所在行为锚点：缩放后该时间点保持在视口原位，不产生滚动/漂移感。 */
 function onGlobalWheel(e) {
   if (!e.ctrlKey) return
-  e.preventDefault() // 必须拦截，否则触发浏览器页面缩放
+  e.preventDefault()
+  e.stopImmediatePropagation() // 彻底吃掉该事件：不滚动视图、不触发其它监听
+  const grid = gridEl.value
+  if (!grid) return
+  const rect = grid.getBoundingClientRect()
+  // 鼠标位置对应的时间（小时，浮点）：缩放前后保持它停留在同一视口位置
+  // 注意全天条高度固定不随缩放变化，先扣除再换算
+  const innerY = grid.scrollTop + e.clientY - rect.top - alldayH.value
+  const anchorHour = innerY / HOUR_HEIGHT.value
   const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom.value - e.deltaY * 0.002))
   zoom.value = Math.round(next * 100) / 100
+  nextTick(() => {
+    grid.scrollTop = Math.max(alldayH.value + anchorHour * HOUR_HEIGHT.value - (e.clientY - rect.top), 0)
+  })
+}
+
+/** 定位到现在：滚动到红线（当前时刻）居中显示 */
+function scrollToNow() {
+  const grid = gridEl.value
+  if (!grid) return
+  const top = Math.max(
+    (nowMinute.value / 60) * HOUR_HEIGHT.value + alldayH.value - grid.clientHeight / 2,
+    0,
+  )
+  grid.scrollTo({ top, behavior: 'smooth' })
 }
 
 onMounted(() => {
@@ -46,9 +69,9 @@ onMounted(() => {
   }, 30000)
   window.addEventListener('wheel', onGlobalWheel, { passive: false, capture: true })
   measureAllday()
-  // 打开时滚动到当前时间附近（今天）或 8 点
+  // 打开时滚动到当前时间附近（今天）或 8 点（内容坐标含全天条高度）
   const target = props.isToday ? Math.max(nowMinute.value - 60, 0) : 8 * 60
-  if (gridEl.value) gridEl.value.scrollTop = (target / 60) * HOUR_HEIGHT.value
+  if (gridEl.value) gridEl.value.scrollTop = (target / 60) * HOUR_HEIGHT.value + alldayH.value
 })
 
 onBeforeUnmount(() => {
@@ -83,18 +106,19 @@ const layoutEvents = computed(() => {
 })
 
 function onGridClick(ev) {
-  const rect = gridEl.value.getBoundingClientRect()
+  const grid = gridEl.value
+  const rect = grid.getBoundingClientRect()
   const onRuler = ev.clientX - rect.left < 48 // 最左侧时间刻度列
   const t = ev.target
   const onGridArea =
-    t === gridEl.value ||
+    t === grid ||
     t.classList.contains('grid-inner') ||
     t.classList.contains('events-layer') ||
     t.classList.contains('hour-line') ||
     t.classList.contains('hour-label')
   if (!onRuler && !onGridArea) return
-  // 内容坐标 = 视口相对 + 滚动偏移 - 全天条占掉的高度
-  const y = ev.clientY - rect.top + gridEl.value.scrollTop - alldayH.value
+  // 内容坐标 = 视口相对 + 滚动偏移 - 全天条占掉的高度（全天条在文档流里，网格在其下方）
+  const y = ev.clientY - rect.top + grid.scrollTop - alldayH.value
   const minute = Math.floor(((y / HOUR_HEIGHT.value) * 60) / 30) * 30
   if (minute < 0 || minute >= 24 * 60) return
   // 第二个参数标记"来自时间刻度"：该时段创建的任务插到时段第一位（协议 firstInSlot）
@@ -107,64 +131,76 @@ function formatMinutes(colSpan) {
 </script>
 
 <template>
-  <div class="day-view" ref="gridEl" @click="onGridClick">
-    <!-- 全天任务条：参与文档流，把下面的网格整体顶下去，不再挡住 00:00/01:00 -->
-    <div v-if="alldayEvents.length" class="allday-row" ref="alldayEl">
-      <EventBlock
-        v-for="e in alldayEvents"
-        :key="e.id"
-        :event="e"
-        :allday="true"
-        :selected="e.id === selectedId"
-        :minutes-text="''"
-        @click.stop="emit('event-click', e)"
-        @ctxmenu.prevent.stop="emit('event-ctx', e, $event.clientX, $event.clientY)"
-        @dblclick.stop="emit('event-dblclick', e)"
-      />
-    </div>
-
-    <div class="grid-inner" :style="{ height: HOUR_HEIGHT * 24 + 'px' }">
-      <!-- 小时标签 + 横线 -->
-      <div
-        v-for="h in 24"
-        :key="h"
-        class="hour-line"
-        :style="{ top: (h - 1) * HOUR_HEIGHT + alldayH + 'px' }"
-      >
-        <span class="hour-label">{{ String(h - 1).padStart(2, '0') }}:00</span>
-      </div>
-
-      <!-- 任务块：独立事件层从刻度右侧开始，列间距 0.5em（半个字宽） -->
-      <div class="events-layer">
+  <div class="day-view-wrap">
+    <div class="day-view" ref="gridEl" @click="onGridClick">
+      <!-- 全天任务条：参与文档流，把下面的网格整体顶下去，不再挡住 00:00/01:00 -->
+      <div v-if="alldayEvents.length" class="allday-row" ref="alldayEl">
         <EventBlock
-          v-for="e in layoutEvents"
+          v-for="e in alldayEvents"
           :key="e.id"
           :event="e"
-          :style="{
-            top: e.top + alldayH + 'px',
-            height: e.height + 'px',
-            left: `${(e.column / 12) * 100}%`,
-            width: `calc(${(e.colSpan / 12) * 100}% - 0.5em)`,
-          }"
+          :allday="true"
           :selected="e.id === selectedId"
-          :minutes-text="formatMinutes(e.colSpan)"
+          :minutes-text="''"
           @click.stop="emit('event-click', e)"
           @ctxmenu.prevent.stop="emit('event-ctx', e, $event.clientX, $event.clientY)"
           @dblclick.stop="emit('event-dblclick', e)"
         />
       </div>
 
-      <!-- 当前时间线 -->
-      <div
-        v-if="isToday"
-        class="now-line"
-        :style="{ top: (nowMinute / 60) * HOUR_HEIGHT + alldayH + 'px' }"
-      ></div>
+      <div class="grid-inner" :style="{ height: HOUR_HEIGHT * 24 + 'px' }">
+        <!-- 小时标签 + 横线（网格已在全天条下方，无需再叠加全天条偏移） -->
+        <div
+          v-for="h in 24"
+          :key="h"
+          class="hour-line"
+          :style="{ top: (h - 1) * HOUR_HEIGHT + 'px' }"
+        >
+          <span class="hour-label">{{ String(h - 1).padStart(2, '0') }}:00</span>
+        </div>
+
+        <!-- 任务块：独立事件层从刻度右侧开始，列间距 0.5em（半个字宽） -->
+        <div class="events-layer">
+          <EventBlock
+            v-for="e in layoutEvents"
+            :key="e.id"
+            :event="e"
+            :style="{
+              top: e.top + 'px',
+              height: e.height + 'px',
+              left: `${(e.column / 12) * 100}%`,
+              width: `calc(${(e.colSpan / 12) * 100}% - 0.5em)`,
+            }"
+            :selected="e.id === selectedId"
+            :minutes-text="formatMinutes(e.colSpan)"
+            @click.stop="emit('event-click', e)"
+            @ctxmenu.prevent.stop="emit('event-ctx', e, $event.clientX, $event.clientY)"
+            @dblclick.stop="emit('event-dblclick', e)"
+          />
+        </div>
+
+        <!-- 当前时间线 -->
+        <div
+          v-if="isToday"
+          class="now-line"
+          :style="{ top: (nowMinute / 60) * HOUR_HEIGHT + 'px' }"
+        ></div>
+      </div>
     </div>
+
+    <!-- 定位到现在：滚动到红线（当前时刻）居中 -->
+    <button v-if="isToday" class="now-btn" title="定位到现在" @click.stop="scrollToNow">现在</button>
   </div>
 </template>
 
 <style scoped>
+.day-view-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 .day-view {
   flex: 1;
   overflow-y: auto;
@@ -235,5 +271,27 @@ function formatMinutes(colSpan) {
   height: 10px;
   border-radius: 50%;
   background: #b01b1b;
+}
+
+/* 定位到现在按钮：悬浮在网格右上角，不随内容滚动 */
+.now-btn {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  z-index: 6;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--grid-line);
+  background: #fff;
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+}
+
+.now-btn:hover {
+  background: var(--color-primary);
+  color: #fff;
 }
 </style>
