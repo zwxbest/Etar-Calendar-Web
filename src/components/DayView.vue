@@ -7,8 +7,10 @@ const props = defineProps({
   selectedId: [Number, String],
   isToday: Boolean,
   createSlot: Number,
+  // 网页端展示顺序提示：{ [被移动任务id]: 锚点任务id } 表示"排到锚点前面"（纯前端规则，不落手机库）
+  orderHint: { type: Object, default: () => ({}) },
 })
-const emit = defineEmits(['event-click', 'event-ctx', 'event-dblclick', 'slot-click'])
+const emit = defineEmits(['event-click', 'event-ctx', 'event-dblclick', 'slot-click', 'ruler-dblclick'])
 
 const BASE_HOUR_HEIGHT = 64 // px，基准小时高度
 const MIN_EVENT_HEIGHT = 22
@@ -82,9 +84,17 @@ onBeforeUnmount(() => {
 const alldayEvents = computed(() => props.events.filter((e) => e.allDay))
 const timedEvents = computed(() => props.events.filter((e) => !e.allDay))
 
+/** 任务所属 30 分钟时段的起始毫秒 */
+function slotOf(e) {
+  const d = new Date(e.start)
+  const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  return e.start - ((e.start - dayStart) % (30 * 60 * 1000))
+}
+
 /**
  * 布局：一个 30 分钟时段 = 12 个宽度单位（1 单位 = 2.5 分钟）。
- * 同时段内按 sortId 从左到右累计 colSpan 摆放，与安卓端 Event.doComputePositions 一致。
+ * 同时段内按 sortId 从左到右累计 colSpan 摆放，与安卓端 Event.doComputePositions 一致；
+ * 之后套用网页端顺序提示（orderHint：把被移动的任务排到锚点任务前面）。
  */
 const layoutEvents = computed(() => {
   const slotColumns = new Map() // slotStart -> 累计列数
@@ -92,13 +102,33 @@ const layoutEvents = computed(() => {
     if (a.sortId !== b.sortId) return a.sortId - b.sortId
     return b.id - a.id
   })
-  return sorted.map((e) => {
-    const d = new Date(e.start)
-    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
-    const slotStart = e.start - ((e.start - dayStart) % (30 * 60 * 1000))
+  // 按时段分组 → 组内套用顺序提示（被移动的任务插到锚点当前位置之前）
+  const bySlot = new Map()
+  for (const e of sorted) {
+    const s = slotOf(e)
+    if (!bySlot.has(s)) bySlot.set(s, [])
+    bySlot.get(s).push(e)
+  }
+  const hint = props.orderHint || {}
+  for (const list of bySlot.values()) {
+    for (const e of [...list]) {
+      const anchorId = hint[e.id]
+      if (anchorId == null) continue
+      const from = list.indexOf(e)
+      const to = list.findIndex((x) => x.id === anchorId)
+      if (to < 0 || to === from) continue
+      list.splice(from, 1)
+      list.splice(list.findIndex((x) => x.id === anchorId), 0, e)
+    }
+  }
+  const ordered = []
+  for (const list of bySlot.values()) ordered.push(...list)
+  return ordered.map((e) => {
+    const slotStart = slotOf(e)
     let column = slotColumns.get(slotStart) || 0
     const colSpan = Math.min(Math.max(e.colSpan || 1, 1), 12 - column) || 1
     slotColumns.set(slotStart, column + colSpan)
+    const dayStart = slotStart - (slotStart % (24 * 60 * 60 * 1000)) // 本地零点
     const top = Math.max(((e.start - dayStart) / 3600000) * HOUR_HEIGHT.value, 0)
     const height = Math.max(((e.end - e.start) / 3600000) * HOUR_HEIGHT.value, MIN_EVENT_HEIGHT)
     return { ...e, column, colSpan, top, height }
@@ -125,6 +155,17 @@ function onGridClick(ev) {
   emit('slot-click', minute, onRuler)
 }
 
+/** 双击时间刻度列：在鼠标位置弹出快捷输入框创建任务 */
+function onGridDblClick(ev) {
+  const grid = gridEl.value
+  if (ev.clientX - grid.getBoundingClientRect().left >= 48) return
+  const rect = grid.getBoundingClientRect()
+  const y = ev.clientY - rect.top + grid.scrollTop - alldayH.value
+  const minute = Math.floor(((y / HOUR_HEIGHT.value) * 60) / 30) * 30
+  if (minute < 0 || minute >= 24 * 60) return
+  emit('ruler-dblclick', minute, ev.clientX, ev.clientY)
+}
+
 function formatMinutes(colSpan) {
   return Math.round(colSpan * 2.5)
 }
@@ -132,7 +173,7 @@ function formatMinutes(colSpan) {
 
 <template>
   <div class="day-view-wrap">
-    <div class="day-view" ref="gridEl" @click="onGridClick">
+    <div class="day-view" ref="gridEl" @click="onGridClick" @dblclick="onGridDblClick">
       <!-- 全天任务条：参与文档流，把下面的网格整体顶下去，不再挡住 00:00/01:00 -->
       <div v-if="alldayEvents.length" class="allday-row" ref="alldayEl">
         <EventBlock

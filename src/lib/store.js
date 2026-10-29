@@ -31,6 +31,28 @@ export function randomPeerId() {
   return 'web-' + [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+// ---------- 网页端展示顺序提示 ----------
+// { [被移动任务id]: 锚点任务id }：把被移动任务排到锚点前面（纯前端展示规则，不写手机库）
+const ORDER_HINT_KEY = 'etar_web_order_hint'
+
+export function loadOrderHint() {
+  try {
+    const raw = localStorage.getItem(ORDER_HINT_KEY)
+    const obj = raw ? JSON.parse(raw) : {}
+    return obj && typeof obj === 'object' ? obj : {}
+  } catch (e) {
+    return {}
+  }
+}
+
+export function saveOrderHint(hint) {
+  try {
+    localStorage.setItem(ORDER_HINT_KEY, JSON.stringify(hint))
+  } catch (e) {
+    /* ignore */
+  }
+}
+
 // 网页 peerId 持久化：配对后安卓只认这个 id，刷新页面不能变（协议 §8）
 export function loadOrCreatePeerId() {
   try {

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import TopBar from './components/TopBar.vue'
 import DayView from './components/DayView.vue'
 import CtxMenu from './components/CtxMenu.vue'
@@ -7,7 +7,7 @@ import CreateBar from './components/CreateBar.vue'
 import EditDialog from './components/EditDialog.vue'
 import PairDialog from './components/PairDialog.vue'
 import { SyncClient } from './lib/sync.js'
-import { loadConfig, saveConfig, clearConfig } from './lib/store.js'
+import { loadConfig, saveConfig, clearConfig, loadOrderHint, saveOrderHint } from './lib/store.js'
 
 const sync = new SyncClient()
 
@@ -17,6 +17,8 @@ const statusText = computed(
   () => ({ idle: '未连接', connecting: '连接中', connected: '已连通', offline: '离线' })[status.value]
 )
 const events = ref([])
+// 展示顺序提示：{ [任务id]: 锚点id } = 排到锚点前面（纯网页端规则，见 store.js）
+const orderHint = ref(loadOrderHint())
 const currentDate = ref(todayStr())
 const selectedId = ref(null)
 const ctxMenu = ref(null) // {event, x, y}
@@ -24,6 +26,21 @@ const editTarget = ref(null)
 const showPair = ref(false)
 const toastText = ref('')
 let toastTimer = null
+
+// 时间刻度双击的快捷创建弹窗：{x, y, minute}，视口坐标定位
+const quickCreate = ref(null)
+const quickTitle = ref('')
+const quickInputEl = ref(null)
+
+watch(quickCreate, (v) => {
+  if (v) nextTick(() => quickInputEl.value && quickInputEl.value.focus())
+})
+
+// 点击任务块以外的区域（时间区域/工具栏/弹窗等）自动取消选中 = 撤销移动意图
+// 任务块的点击都带 .stop，不会冒泡到这里
+function onWindowClick() {
+  selectedId.value = null
+}
 
 // 创建栏目标时段（分钟偏移 0/30），默认按"当前/下一个30分钟"
 const createSlot = ref(defaultSlotMinute())
@@ -109,9 +126,13 @@ onMounted(() => {
   } else {
     showPair.value = true
   }
+  window.addEventListener('click', onWindowClick)
 })
 
-onBeforeUnmount(() => sync.disconnect())
+onBeforeUnmount(() => {
+  sync.disconnect()
+  window.removeEventListener('click', onWindowClick)
+})
 
 function onPaired(newConfig) {
   config.value = newConfig
@@ -238,7 +259,7 @@ function onEditSave(payload) {
   doAction(() => sync.update(event.id, payload), '已保存', () => applyLocal(event.id, payload))
 }
 
-// 单击任务：未选中则选中；已选中则把选中的任务移动到该任务所在时段
+// 单击任务：未选中则选中；已选中则把选中的任务移动到该任务前面
 function onEventClick(event) {
   ctxMenu.value = null
   if (selectedId.value == null) {
@@ -249,42 +270,70 @@ function onEventClick(event) {
     selectedId.value = null
     return
   }
-  moveSelectedTo(event.start)
+  moveBefore(selectedId.value, event)
 }
 
-// 单击空白时段：已选中任务则移动过去，否则设为创建目标时段
-// 点最左侧时间刻度：总是切换创建目标时段，且在该时段创建的任务插到第一位（firstInSlot）
+// 单击空白时段/时间刻度：取消选中（撤销移动意图），并切换创建目标时段；
+// 点最左侧时间刻度时，该时段创建的任务插到第一位（firstInSlot）
 function onSlotClick(minuteOffset, fromRuler) {
   ctxMenu.value = null
-  if (fromRuler) {
-    createSlot.value = minuteOffset
-    createAtFront.value = true
-    return
-  }
-  if (selectedId.value != null) {
-    moveSelectedTo(slotStartMillis(currentDate.value, minuteOffset))
-  } else {
-    createSlot.value = minuteOffset
-    createAtFront.value = false
-  }
+  selectedId.value = null
+  createSlot.value = minuteOffset
+  createAtFront.value = !!fromRuler
 }
 
-function moveSelectedTo(targetStart) {
-  const ev = events.value.find((e) => e.id === selectedId.value)
+/** 移动任务到锚点任务前面：时间/时段同步给手机；时段内先后顺序为网页端展示规则 */
+function moveBefore(id, anchor) {
   selectedId.value = null
-  if (!ev || ev.allDay) return
-  const delta = targetStart - ev.start
-  if (delta === 0) return
+  const ev = events.value.find((e) => e.id === id)
+  if (!ev || ev.allDay || anchor.allDay || ev.id === anchor.id) return
+  const dur = ev.end - ev.start
+  // 顺序提示：网页展示层把 ev 排到 anchor 前面，fetch 对账后依然生效（不写手机库）
+  const next = { ...orderHint.value }
+  next[ev.id] = anchor.id
+  if (next[anchor.id] === ev.id) delete next[anchor.id] // 来回互移时抵消旧提示，避免成环
+  orderHint.value = next
+  saveOrderHint(next)
   doAction(
-    () => sync.update(ev.id, { start: ev.start + delta, end: ev.end + delta }),
-    '已移动',
-    () => applyLocal(ev.id, { start: ev.start + delta, end: ev.end + delta }),
+    () => sync.update(ev.id, { start: anchor.start, end: anchor.start + dur }),
+    '已移动到该任务前面',
+    () => applyLocal(ev.id, { start: anchor.start, end: anchor.start + dur }),
   )
 }
 
 function onEventCtx(event, x, y) {
   selectedId.value = null
   ctxMenu.value = { event, x, y }
+}
+
+/** 创建（乐观占位 + 异步同步 + fetch 对账），供创建栏与刻度快捷弹窗共用 */
+async function submitCreate(payload, atFront) {
+  const tempId = `tmp-${Date.now()}`
+  events.value = [
+    ...events.value,
+    {
+      id: tempId,
+      title: payload.title,
+      start: payload.start,
+      end: payload.end,
+      allDay: false,
+      priority: payload.priority,
+      flexible: payload.flexible,
+      // 弹性任务安卓会算成占满剩余空间；普通任务按所选分钟宽度近似
+      colSpan: payload.flexible ? 12 : payload.colSpan,
+      sortId: atFront ? -1 : Number.MAX_SAFE_INTEGER,
+    },
+  ]
+  try {
+    await sync.add(payload)
+    showToast('已创建')
+    return true
+  } catch (e) {
+    showToast(e.message)
+    return false
+  } finally {
+    fetchDay() // 对账：用真实数据（含真实 sortId/宽度/颜色）替换占位
+  }
 }
 
 async function onCreate({ title, priority, flexible, minutes }) {
@@ -298,38 +347,51 @@ async function onCreate({ title, priority, flexible, minutes }) {
     flexible,
     colSpan: flexible ? 0 : Math.round(minutes / 2.5),
   }
-  // 插入位置：点时间刻度设的目标时段 → 插到该时段第一位（firstInSlot，
-  // 安卓端按 sortId 排列，见 EventBridge.computeSortId；默认则普通任务排弹性任务前、无弹性追加末尾）
+  // 插入位置：点时间刻度设的目标时段 → 插到该时段第一位（firstInSlot）
   if (createAtFront.value) {
     payload.firstInSlot = true
   }
-  // 乐观占位：立即在本地渲染（temp 事件），不等手机响应；fetchDay 回来后替换为真实数据
-  const tempId = `tmp-${Date.now()}`
-  events.value = [
-    ...events.value,
-    {
-      id: tempId,
-      title,
-      start: payload.start,
-      end: payload.end,
-      allDay: false,
-      priority,
-      flexible,
-      // 弹性任务安卓会算成占满剩余空间；普通任务按所选分钟宽度近似
-      colSpan: flexible ? 12 : payload.colSpan,
-      sortId: createAtFront.value ? -1 : Number.MAX_SAFE_INTEGER,
-    },
-  ]
-  try {
-    await sync.add(payload)
-    showToast('已创建')
+  if (await submitCreate(payload, createAtFront.value)) {
     // 若建在空时段会占满，创建栏默认项要跟着变
     createSlot.value = nextFreshSlot()
     createAtFront.value = false
-  } catch (e) {
-    showToast(e.message)
   }
-  fetchDay() // 对账：用真实数据（含真实 sortId/宽度/颜色）替换占位
+}
+
+// ---------- 时间刻度双击快捷创建 ----------
+
+function onRulerDblclick(minute, x, y) {
+  ctxMenu.value = null
+  selectedId.value = null
+  // 弹窗不超出视口右缘
+  quickCreate.value = { minute, x: Math.min(x, window.innerWidth - 270), y }
+  quickTitle.value = ''
+}
+
+async function onQuickCreateSubmit() {
+  const qc = quickCreate.value
+  const t = quickTitle.value.trim()
+  quickCreate.value = null
+  quickTitle.value = ''
+  if (!qc || t.length <= 1) return
+  const slotStart = slotStartMillis(currentDate.value, qc.minute)
+  // 与创建栏默认一致：空时段默认补满，否则 2 分钟普通任务；优先级中；插到时段第一位
+  const slotEmpty = !events.value.some(
+    (e) => !e.allDay && e.start >= slotStart && e.start < slotStart + 30 * 60 * 1000,
+  )
+  await submitCreate(
+    {
+      title: t,
+      start: slotStart,
+      end: slotStart + 29 * 60 * 1000,
+      allDay: false,
+      priority: 0,
+      flexible: slotEmpty,
+      colSpan: slotEmpty ? 0 : 1,
+      firstInSlot: true,
+    },
+    true,
+  )
 }
 
 // 创建后自动跳到下一个还有空位的时段（今天范围内）
@@ -373,10 +435,12 @@ function closePair() {
     :selected-id="selectedId"
     :is-today="currentDate === todayStr()"
     :create-slot="createSlot"
+    :order-hint="orderHint"
     @event-click="onEventClick"
     @event-ctx="onEventCtx"
     @event-dblclick="onEventDblclick"
     @slot-click="onSlotClick"
+    @ruler-dblclick="onRulerDblclick"
     @adjust-duration="onAdjustDuration"
   />
 
@@ -411,4 +475,32 @@ function closePair() {
   />
 
   <div v-if="toastText" class="toast">{{ toastText }}</div>
+
+  <!-- 时间刻度双击快捷创建：在鼠标位置输入，回车创建 -->
+  <input
+    v-if="quickCreate"
+    ref="quickInputEl"
+    v-model="quickTitle"
+    class="quick-create-input"
+    :style="{ left: quickCreate.x + 'px', top: quickCreate.y + 'px' }"
+    placeholder="任务内容，回车创建"
+    @keydown.enter="onQuickCreateSubmit"
+    @keydown.esc="quickCreate = null"
+    @blur="quickCreate = null"
+  />
 </template>
+
+<style scoped>
+.quick-create-input {
+  position: fixed;
+  z-index: 100;
+  width: 260px;
+  padding: 10px 12px;
+  font-size: 15px;
+  border: 1px solid var(--color-primary);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  outline: none;
+}
+</style>
