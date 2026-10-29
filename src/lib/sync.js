@@ -132,7 +132,10 @@ export class SyncClient {
   /** 对端在场：数据通道就是 MQTT，直接可用，无需额外握手 */
   onPeerPresent(peerId) {
     if (this.androidPeerId !== peerId) this.androidPeerId = peerId
-    console.info(`[sync] 手机在场（${peerId}），MQTT 数据通道就绪`)
+    console.info(`[sync] 手机在场（${peerId}），MQTT 数据通道就绪，发起首次拉取`)
+    // 立刻通知上层发首个请求（fetch_day）：不能等 connected ——
+    // connected 由入站数据触发，而入站数据要先有请求才有响应，会死锁
+    this.emit('peer', peerId)
   }
 
   /** 统一数据入口 */
@@ -208,6 +211,11 @@ export class SyncClient {
 
   fetchDay(day) {
     return this.request({ type: 'fetch_day', day }, 'day')
+  }
+
+  /** 上层发起请求的前置条件：信令已连接且对端已知（不要求 connected，后者要等首个回包） */
+  ready() {
+    return !!(this.signaling && this.signaling.client && this.signaling.client.connected && this.androidPeerId)
   }
 
   add(payload) {

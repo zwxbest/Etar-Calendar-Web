@@ -73,7 +73,8 @@ function showToast(text) {
 // ---------- 连接与数据 ----------
 
 async function fetchDay() {
-  if (status.value !== 'connected') return
+  // 首个请求由对端在场事件触发（此时还未 connected），其余场景维持原条件
+  if (status.value !== 'connected' && !sync.ready()) return
   try {
     events.value = await sync.fetchDay(currentDate.value)
     selectedId.value = null
@@ -94,6 +95,8 @@ onMounted(() => {
       fetchDay()
     }
   })
+  // 手机在场即可发首个 fetch_day（不等 connected，避免互相等待死锁）
+  sync.on('peer', () => fetchDay())
   sync.on('push', () => fetchDay())
   sync.on('message', (m) => {
     if (typeof m === 'string') showToast(m)
