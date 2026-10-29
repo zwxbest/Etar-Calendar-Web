@@ -167,7 +167,9 @@ function onGridDblClick(ev) {
 }
 
 function formatMinutes(colSpan) {
-  return Math.round(colSpan * 2.5)
+  // 与安卓 DayView 一致：(int)(colSpan * 2.5f) 截断取整——
+  // JS 的 Math.round(2.5)=3 会比安卓的 (int)2.5f=2 多显示 1 分钟
+  return Math.floor(colSpan * 2.5)
 }
 </script>
 
