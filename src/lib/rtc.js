@@ -27,6 +27,13 @@ export const ICE_SERVERS = [
   { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: TURN_USER, credential: TURN_PASS },
 ]
 
+// 联调钩子：?turn=turn:x.x.x.x:3478 追加一个 TURN 服务器（凭据同上，指向自建/临时 coturn 等）
+const extraTurn = new URLSearchParams(location.search).get('turn')
+if (extraTurn) {
+  console.info(`[rtc] URL 参数指定额外 TURN: ${extraTurn}`)
+  ICE_SERVERS.push({ urls: extraTurn, username: TURN_USER, credential: TURN_PASS })
+}
+
 /**
  * 归一化远端 ICE candidate：
  * 浏览器序列化字段名是 candidate，旧版安卓端发的是 sdp，
@@ -74,7 +81,9 @@ export class RtcLink {
       if (ev.candidate && this.remotePeerId) {
         const c = ev.candidate.candidate
         const typ = / typ (\w+)/.exec(c)?.[1] || '?'
-        console.info(`[rtc] ICE 候选(${typ}): ${c.slice(0, 60)}`)
+        const addr = c.split(' ')[4] || ''
+        const fam = addr.includes(':') ? ',IPv6' : ''
+        console.info(`[rtc] ICE 候选(${typ}${fam}): ${c.slice(0, 60)}`)
         this.onSignal(this.remotePeerId, { kind: 'ice', candidate: ev.candidate })
       }
     }
@@ -94,6 +103,7 @@ export class RtcLink {
     this.channel = channel
     channel.onopen = () => {
       console.info(`[rtc] DataChannel "${channel.label}" 已打开`)
+      this.logSelectedPair()
       if (!this.closed) this.onOpen()
     }
     channel.onclose = () => {
@@ -168,6 +178,33 @@ export class RtcLink {
       return true
     }
     return false
+  }
+
+  /** 打印实际选中的候选对：确认数据走的是 v4/v6 直连还是 TURN 中继 */
+  logSelectedPair() {
+    try {
+      const pc = this.pc
+      let pair = pc && pc.selectedCandidatePair
+      if (!pair && pc && pc.getReceivers) {
+        const recv = pc.getReceivers()[0]
+        const ice = recv && recv.transport && recv.transport.iceTransport
+        pair = ice && ice.selectedCandidatePair
+      }
+      if (pair) {
+        const l = pair.local
+        const r = pair.remote
+        console.info(
+          `[rtc] 选中候选对: 本地 ${l.protocol} ${l.address}:${l.port}(${l.candidateType})` +
+            ` ↔ 远端 ${r.protocol} ${r.address}:${r.port}(${r.candidateType})`,
+        )
+        const via = [l, r].some((c) => c.candidateType === 'relay')
+        if (via) console.warn('[rtc] 走了 TURN 中继（非 P2P）')
+      } else {
+        console.info('[rtc] 当前浏览器不支持查询选中候选对')
+      }
+    } catch (e) {
+      console.warn('[rtc] 查询选中候选对失败:', e && e.message)
+    }
   }
 
   handleClose() {

@@ -163,6 +163,7 @@ export class SyncClient {
       return
     }
     if (msg.type === 'pong') return
+    console.info(`[sync] DataChannel 收到 ${msg.type}${msg.day ? `(${msg.day})` : ''}`)
     if (msg.type === 'push_change') {
       this.emit('push', msg.payload || {})
       return
