@@ -9,7 +9,7 @@ const props = defineProps({
 })
 
 // 配色逻辑与安卓端 DayView.taskBackgroundColor 一致：
-// 基础色 = 日历色；高优先级与 #6B21A8 按 1:3 混合；弹性任务与白色各 50%
+// 基础色 = 日历色；高优先级 = 纯紫 #6B21A8（与 --high-priority 一致）；弹性任务与白色各 50%
 function intToRgb(color) {
   return [(color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff]
 }
@@ -21,7 +21,7 @@ function mix(c1, c2, ratio) {
 const backgroundColor = computed(() => {
   const e = props.event
   let rgb = typeof e.color === 'number' ? intToRgb(e.color) : [63, 81, 181]
-  if (e.priority === 1) rgb = mix(rgb, [0x6b, 0x21, 0xa8], 0.25)
+  if (e.priority === 1) rgb = [0x6b, 0x21, 0xa8]
   if (e.flexible) rgb = mix(rgb, [255, 255, 255], 0.5)
   return `rgb(${rgb.join(',')})`
 })

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import EventBlock from './EventBlock.vue'
 
 const props = defineProps({
@@ -10,25 +10,51 @@ const props = defineProps({
 })
 const emit = defineEmits(['event-click', 'event-ctx', 'event-dblclick', 'slot-click'])
 
-const HOUR_HEIGHT = 64 // px，与 App 默认一致
+const BASE_HOUR_HEIGHT = 64 // px，基准小时高度
 const MIN_EVENT_HEIGHT = 22
+const ZOOM_MIN = 0.4
+const ZOOM_MAX = 2
+
+const zoom = ref(1)
+const HOUR_HEIGHT = computed(() => Math.round(BASE_HOUR_HEIGHT * zoom.value))
 
 const gridEl = ref(null)
+const alldayEl = ref(null)
+const alldayH = ref(0) // 全天任务条实际高度：网格整体下移该距离，避免挡住 00:00/01:00
 const nowMinute = ref(new Date().getHours() * 60 + new Date().getMinutes())
 let timer = null
 
+/** 测量全天条实际高度（任务换行时会变高） */
+function measureAllday() {
+  alldayH.value = alldayEl.value ? alldayEl.value.offsetHeight : 0
+}
+watch(() => props.events, () => nextTick(measureAllday), { flush: 'post' })
+
+/** ctrl+滚轮：拦截浏览器整页缩放，只缩放中间时间任务区域（时间密度 0.4x~2x） */
+function onGlobalWheel(e) {
+  if (!e.ctrlKey) return
+  e.preventDefault() // 必须拦截，否则触发浏览器页面缩放
+  const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom.value - e.deltaY * 0.002))
+  zoom.value = Math.round(next * 100) / 100
+}
+
 onMounted(() => {
-  // 每分钟刷新当前时间线
+  // 每 30 秒刷新当前时间线
   timer = setInterval(() => {
     const d = new Date()
     nowMinute.value = d.getHours() * 60 + d.getMinutes()
   }, 30000)
+  window.addEventListener('wheel', onGlobalWheel, { passive: false, capture: true })
+  measureAllday()
   // 打开时滚动到当前时间附近（今天）或 8 点
   const target = props.isToday ? Math.max(nowMinute.value - 60, 0) : 8 * 60
-  if (gridEl.value) gridEl.value.scrollTop = (target / 60) * HOUR_HEIGHT
+  if (gridEl.value) gridEl.value.scrollTop = (target / 60) * HOUR_HEIGHT.value
 })
 
-onBeforeUnmount(() => clearInterval(timer))
+onBeforeUnmount(() => {
+  clearInterval(timer)
+  window.removeEventListener('wheel', onGlobalWheel, { capture: true })
+})
 
 const alldayEvents = computed(() => props.events.filter((e) => e.allDay))
 const timedEvents = computed(() => props.events.filter((e) => !e.allDay))
@@ -50,8 +76,8 @@ const layoutEvents = computed(() => {
     let column = slotColumns.get(slotStart) || 0
     const colSpan = Math.min(Math.max(e.colSpan || 1, 1), 12 - column) || 1
     slotColumns.set(slotStart, column + colSpan)
-    const top = Math.max(((e.start - dayStart) / 3600000) * HOUR_HEIGHT, 0)
-    const height = Math.max(((e.end - e.start) / 3600000) * HOUR_HEIGHT, MIN_EVENT_HEIGHT)
+    const top = Math.max(((e.start - dayStart) / 3600000) * HOUR_HEIGHT.value, 0)
+    const height = Math.max(((e.end - e.start) / 3600000) * HOUR_HEIGHT.value, MIN_EVENT_HEIGHT)
     return { ...e, column, colSpan, top, height }
   })
 })
@@ -67,8 +93,9 @@ function onGridClick(ev) {
     t.classList.contains('hour-line') ||
     t.classList.contains('hour-label')
   if (!onRuler && !onGridArea) return
-  const y = ev.clientY - rect.top + gridEl.value.scrollTop
-  const minute = Math.floor(((y / HOUR_HEIGHT) * 60) / 30) * 30
+  // 内容坐标 = 视口相对 + 滚动偏移 - 全天条占掉的高度
+  const y = ev.clientY - rect.top + gridEl.value.scrollTop - alldayH.value
+  const minute = Math.floor(((y / HOUR_HEIGHT.value) * 60) / 30) * 30
   if (minute < 0 || minute >= 24 * 60) return
   // 第二个参数标记"来自时间刻度"：该时段创建的任务插到时段第一位（协议 firstInSlot）
   emit('slot-click', minute, onRuler)
@@ -81,28 +108,28 @@ function formatMinutes(colSpan) {
 
 <template>
   <div class="day-view" ref="gridEl" @click="onGridClick">
-    <div class="grid-inner" :style="{ height: HOUR_HEIGHT * 24 + 'px' }">
-      <!-- 全天任务条 -->
-      <div v-if="alldayEvents.length" class="allday-row">
-        <EventBlock
-          v-for="e in alldayEvents"
-          :key="e.id"
-          :event="e"
-          :allday="true"
-          :selected="e.id === selectedId"
-          :minutes-text="''"
-          @click.stop="emit('event-click', e)"
-          @ctxmenu.prevent.stop="emit('event-ctx', e, $event.clientX, $event.clientY)"
-          @dblclick.stop="emit('event-dblclick', e)"
-        />
-      </div>
+    <!-- 全天任务条：参与文档流，把下面的网格整体顶下去，不再挡住 00:00/01:00 -->
+    <div v-if="alldayEvents.length" class="allday-row" ref="alldayEl">
+      <EventBlock
+        v-for="e in alldayEvents"
+        :key="e.id"
+        :event="e"
+        :allday="true"
+        :selected="e.id === selectedId"
+        :minutes-text="''"
+        @click.stop="emit('event-click', e)"
+        @ctxmenu.prevent.stop="emit('event-ctx', e, $event.clientX, $event.clientY)"
+        @dblclick.stop="emit('event-dblclick', e)"
+      />
+    </div>
 
+    <div class="grid-inner" :style="{ height: HOUR_HEIGHT * 24 + 'px' }">
       <!-- 小时标签 + 横线 -->
       <div
         v-for="h in 24"
         :key="h"
         class="hour-line"
-        :style="{ top: (h - 1) * HOUR_HEIGHT + 'px' }"
+        :style="{ top: (h - 1) * HOUR_HEIGHT + alldayH + 'px' }"
       >
         <span class="hour-label">{{ String(h - 1).padStart(2, '0') }}:00</span>
       </div>
@@ -114,7 +141,7 @@ function formatMinutes(colSpan) {
           :key="e.id"
           :event="e"
           :style="{
-            top: e.top + 'px',
+            top: e.top + alldayH + 'px',
             height: e.height + 'px',
             left: `${(e.column / 12) * 100}%`,
             width: `calc(${(e.colSpan / 12) * 100}% - 0.5em)`,
@@ -131,7 +158,7 @@ function formatMinutes(colSpan) {
       <div
         v-if="isToday"
         class="now-line"
-        :style="{ top: (nowMinute / 60) * HOUR_HEIGHT + 'px' }"
+        :style="{ top: (nowMinute / 60) * HOUR_HEIGHT + alldayH + 'px' }"
       ></div>
     </div>
   </div>
@@ -180,15 +207,13 @@ function formatMinutes(colSpan) {
   color: var(--hour-label);
 }
 
+/* 全天任务条：普通流布局（高度自适应换行），把网格整体顶下去 */
 .allday-row {
-  position: absolute;
-  top: 0;
-  left: 48px;
-  right: 0;
-  height: 30px;
+  position: relative;
+  z-index: 3;
+  padding-left: 48px;
   border-bottom: 1px solid var(--grid-line);
   background: #fff;
-  z-index: 3;
 }
 
 .now-line {
