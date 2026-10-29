@@ -1,7 +1,7 @@
-// MQTT 信令客户端：协议见 MQTT信令协议.md
-// 用公共 broker 的 pub/sub 替代原 Worker 房间转发：
+// MQTT 客户端：协议见 MQTT信令协议.md
+// 用公共 broker 的 pub/sub 完成对端发现（join/here/leave）与加密数据传输（data），
 //   只往自己的角色主题发布、只订阅对端的角色主题，主题本身完成寻址
-// 对外接口保持不变：connect(peerId) / on('status'|'message') / signal(to, data) / close()
+// 对外接口：connect(peerId) / on('status'|'message') / sendData(obj) / close()
 
 import mqtt from 'mqtt'
 import { deriveDataKey, encryptJson, decryptJson } from './crypto.js'
@@ -161,9 +161,7 @@ export class Signaling {
         this.emit('message', { type: 'peer-left', peerId: peer })
         break
       case 'signal':
-        // 丢弃对端离开之前发出的过期信令
-        if (msg.ts && this.peerLeftAt && msg.ts < this.peerLeftAt) return
-        this.emit('message', { type: 'signal', from: peer, data: msg.data })
+        // v3 已移除 WebRTC 路径：旧对端发来的信令直接忽略
         break
       case 'data':
         // 日程数据（加密信封，协议 §9）：解密后交给 sync.js（与 DataChannel 消息同一处理入口）
@@ -200,11 +198,6 @@ export class Signaling {
       this.emit('status', 'connecting')
       this.client.reconnect()
     }, delay)
-  }
-
-  /** 转发信令给对端（to 仅为接口兼容保留：MQTT 下只有一条对端主题） */
-  signal(to, data) {
-    this.publish({ v: PROTOCOL_VERSION, type: 'signal', from: this.peerId, data, ts: Date.now() })
   }
 
   /** 日程数据直连（协议 §9）：加密后发布到自己的角色主题。返回是否已交给 broker */

@@ -156,12 +156,17 @@ DataChannel "sync" open → 配对完成
 
 ### 9.1 传输策略
 
-1. **第一优先：MQTT 数据直连**。信令连上、对端在场后，日程数据（fetch_day/add/update/delete/ping ↔ day/result/pong/push_change）
-   直接经现有两条角色主题以 `type="data"` 加密信封收发，**不等 WebRTC**。
-2. **60s 升级**：对端在场但 60s 内没有任何数据回包（`RTC_ESCALATE_MS`）→ 升级尝试 WebRTC DataChannel。
-   ICE 自身按候选类型顺序降级：host/IPv6 直连 → STUN srflx 打洞 → TURN relay 中继（§5 不变）。
-3. **回落**：DataChannel 打开后数据切到 P2P；RTC 断线时数据自动回落 MQTT，同步不断线。
-4. 两端均如此（升级动作只由网页端发起，安卓只应答）。
+> **v3（当前）**：WebRTC/ICE 路径已整体移除——NAT 穿透复杂度不抵维护成本，公共 broker 的
+> 出站长连接在各类网络环境下都稳定可用。MQTT 加密直连是**唯一**数据通道，不再有升级/回落。
+> 旧对端发来的 `signal`（offer/answer/ice）一律静默忽略，保持收发兼容。
+> 以下 v2 的升级机制描述保留作历史记录：
+
+1. ~~**第一优先：MQTT 数据直连**。信令连上、对端在场后，日程数据（fetch_day/add/update/delete/ping ↔ day/result/pong/push_change）
+   直接经现有两条角色主题以 `type="data"` 加密信封收发，**不等 WebRTC**。~~（保留：这就是 v3 的全部）
+2. ~~**60s 升级**：对端在场但 60s 内没有任何数据回包（`RTC_ESCALATE_MS`）→ 升级尝试 WebRTC DataChannel。
+   ICE 自身按候选类型顺序降级：host/IPv6 直连 → STUN srflx 打洞 → TURN relay 中继（§5 不变）。~~（已移除）
+3. ~~**回落**：DataChannel 打开后数据切到 P2P；RTC 断线时数据自动回落 MQTT，同步不断线。~~（已移除）
+4. ~~两端均如此（升级动作只由网页端发起，安卓只应答）。~~（已移除）
 
 ### 9.2 `data` 信封
 
