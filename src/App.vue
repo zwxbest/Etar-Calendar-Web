@@ -32,6 +32,16 @@ const quickCreate = ref(null)
 const quickTitle = ref('')
 const quickInputEl = ref(null)
 
+// 弹窗占位符里显示目标时段，避免"不知道建到哪了"
+const quickSlotText = computed(() => {
+  if (!quickCreate.value) return ''
+  const m = quickCreate.value.minute
+  const h = String(Math.floor(m / 60)).padStart(2, '0')
+  const mm = String(m % 60).padStart(2, '0')
+  const end = m + 29
+  return `${h}:${mm} - ${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}`
+})
+
 watch(quickCreate, (v) => {
   if (v) nextTick(() => quickInputEl.value && quickInputEl.value.focus())
 })
@@ -476,14 +486,14 @@ function closePair() {
 
   <div v-if="toastText" class="toast">{{ toastText }}</div>
 
-  <!-- 时间刻度双击快捷创建：在鼠标位置输入，回车创建 -->
+  <!-- 时间区双击快捷创建：在鼠标位置输入，显示目标时段，回车创建 -->
   <input
     v-if="quickCreate"
     ref="quickInputEl"
     v-model="quickTitle"
     class="quick-create-input"
     :style="{ left: quickCreate.x + 'px', top: quickCreate.y + 'px' }"
-    placeholder="任务内容，回车创建"
+    :placeholder="`任务内容（${quickSlotText}）回车创建`"
     @keydown.enter="onQuickCreateSubmit"
     @keydown.esc="quickCreate = null"
     @blur="quickCreate = null"

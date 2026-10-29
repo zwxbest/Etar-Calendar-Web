@@ -124,11 +124,12 @@ const layoutEvents = computed(() => {
   const ordered = []
   for (const list of bySlot.values()) ordered.push(...list)
   return ordered.map((e) => {
-    const slotStart = slotOf(e)
-    let column = slotColumns.get(slotStart) || 0
+    // 本地零点（必须用本地年月日构造；用 epoch%24h 会得到 UTC 零点，整体偏移时区小时数）
+    const d = new Date(e.start)
+    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+    let column = slotColumns.get(slotOf(e)) || 0
     const colSpan = Math.min(Math.max(e.colSpan || 1, 1), 12 - column) || 1
-    slotColumns.set(slotStart, column + colSpan)
-    const dayStart = slotStart - (slotStart % (24 * 60 * 60 * 1000)) // 本地零点
+    slotColumns.set(slotOf(e), column + colSpan)
     const top = Math.max(((e.start - dayStart) / 3600000) * HOUR_HEIGHT.value, 0)
     const height = Math.max(((e.end - e.start) / 3600000) * HOUR_HEIGHT.value, MIN_EVENT_HEIGHT)
     return { ...e, column, colSpan, top, height }
@@ -155,10 +156,9 @@ function onGridClick(ev) {
   emit('slot-click', minute, onRuler)
 }
 
-/** 双击时间刻度列：在鼠标位置弹出快捷输入框创建任务 */
+/** 双击时间区任意位置（刻度或网格）：在鼠标位置弹出快捷输入框，在该时段创建 */
 function onGridDblClick(ev) {
   const grid = gridEl.value
-  if (ev.clientX - grid.getBoundingClientRect().left >= 48) return
   const rect = grid.getBoundingClientRect()
   const y = ev.clientY - rect.top + grid.scrollTop - alldayH.value
   const minute = Math.floor(((y / HOUR_HEIGHT.value) * 60) / 30) * 30
