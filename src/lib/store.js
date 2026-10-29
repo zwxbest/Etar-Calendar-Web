@@ -2,8 +2,13 @@
 // 网页不持久保存日程，日程一律实时从安卓拉取
 
 // 信令服务器（MQTT broker）地址固定内置，用户无需配置，见 MQTT信令协议.md §1
-// 用 EMQX 国内公共节点（实测比国际节点 broker.emqx.io 快 ~40%：连接 2.2s vs 3.6s）
-export const DEFAULT_SIGNAL_URL = 'wss://broker-cn.emqx.io:8084/mqtt'
+// 双节点同时在线（§9 v4）：网页同时连国内+国际节点，任一可达即连通。
+// 兼容不同版本手机 APK 写死的单一 broker（旧包 broker.emqx.io / 新包 broker-cn），
+// 同时抗单节点故障；请求在两条链路都发，安卓按请求 id 去重只处理一次。
+export const SIGNAL_URLS = [
+  'wss://broker-cn.emqx.io:8084/mqtt',
+  'wss://broker.emqx.io:8084/mqtt',
+]
 
 const KEY = 'etar_web_sync_config'
 const PEER_ID_KEY = 'etar_web_peer_id'

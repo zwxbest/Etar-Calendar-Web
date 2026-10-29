@@ -21,7 +21,7 @@
 // 可靠性：双向 25s 心跳 ping/pong，90s 无入站数据判定通道死亡（协议 §9.3）
 
 import { Signaling } from './signal.js'
-import { loadOrCreatePeerId, DEFAULT_SIGNAL_URL } from './store.js'
+import { loadOrCreatePeerId, SIGNAL_URLS } from './store.js'
 
 const HEARTBEAT_INTERVAL = 25000
 const RESPONSE_TIMEOUT = 15000
@@ -31,7 +31,8 @@ const DEAD_CHECK_INTERVAL = 30000
 
 export class SyncClient {
   constructor() {
-    this.signaling = null
+    // 双 broker 连接（国内 + 国际节点）：任一可达即连通，兼容写死单一 broker 的新旧手机 APK
+    this.signallings = []
     this.status = 'idle'
     // 网页 peerId 持久化：配对后安卓只认这个 id，刷新不能变
     this.myPeerId = loadOrCreatePeerId()
@@ -67,23 +68,38 @@ export class SyncClient {
     }
   }
 
+  /** 任一 broker 已连通 */
+  anyConnected() {
+    return this.signallings.some((s) => s && s.client && s.client.connected)
+  }
+
+  /** 双 broker 状态合并：任一路连上就算可用；全断才 offline */
+  recomputeStatus() {
+    if (this.signallings.length === 0) return
+    if (this.anyConnected()) {
+      if (this.status === 'offline') this.setStatus('connecting')
+    } else if (this.status !== 'offline' && this.status !== 'idle') {
+      this.setStatus('offline')
+    }
+  }
+
   /** 停在 connecting 超过 10s 就打印诊断信息，方便定位卡在哪一环 */
   watchdog(status) {
     clearTimeout(this.watchdogTimer)
     if (status !== 'connecting') return
     this.watchdogTimer = setTimeout(() => {
       if (this.status !== 'connecting') return
-      const mqtt = this.signaling && this.signaling.client ? (this.signaling.client.connected ? '已连接' : '连接中') : '未启动'
+      const mqtt = this.anyConnected() ? '已连接' : '连接中'
       console.warn(
         `[sync] 已等待 10s 仍未连上手机：mqtt=${mqtt}，对端=${this.androidPeerId || '未知'}。` +
-          '请确认：手机 Etar 前台服务在运行、配对码一致、双方网络可达',
+          '请确认：手机 Etar 前台服务在运行、配对码一致、手机 APK 与网页均已更新到最新版',
       )
     }, 10000)
   }
 
   /**
    * 开始连接（配对或重连都走这里）
-   * @param {object} config {code, androidPeerId}，信令地址用内置默认值
+   * @param {object} config {code, androidPeerId}
    */
   connect(config) {
     this.config = config
@@ -91,14 +107,15 @@ export class SyncClient {
     this.wantConnection = true
     this.lastInboundAt = 0
     this.teardownPending()
-    if (this.signaling) this.signaling.close()
-    this.signaling = new Signaling(DEFAULT_SIGNAL_URL, `pair-${config.code}`)
-    this.signaling.on('status', (s) => {
-      if (s === 'connecting') this.setStatus('connecting')
-      if (s === 'closed') this.setStatus('offline')
+    for (const s of this.signallings) s.close()
+    // 双 broker 并行：旧手机 APK 写死 broker.emqx.io、新包写死 broker-cn，两边都连保证都能配对
+    this.signallings = SIGNAL_URLS.map((url) => {
+      const s = new Signaling(url, `pair-${config.code}`)
+      s.on('status', () => this.recomputeStatus())
+      s.on('message', (msg) => this.onSignalingMessage(msg))
+      s.connect(this.myPeerId)
+      return s
     })
-    this.signaling.on('message', (msg) => this.onSignalingMessage(msg))
-    this.signaling.connect(this.myPeerId)
   }
 
   async onSignalingMessage(msg) {
@@ -180,16 +197,19 @@ export class SyncClient {
     this.emit('message', msg)
   }
 
-  /** 发送数据（唯一通道：MQTT 加密信封）。返回是否已交给 broker */
-  send(obj) {
-    if (!this.signaling) return Promise.resolve(false)
-    return this.signaling.sendData(obj)
+  /** 发送数据（唯一通道：MQTT 加密信封）。在所有已连通的 broker 上同时发——
+   *  手机只在其中一个 broker 上，另一条路的重复投递由安卓按请求 id 去重 */
+  async send(obj) {
+    const conns = this.signallings.filter((s) => s && s.client && s.client.connected)
+    if (conns.length === 0) return false
+    const results = await Promise.all(conns.map((s) => s.sendData(obj)))
+    return results.some(Boolean)
   }
 
   /** 发送请求并等待响应（按 id 配对） */
   request(obj, expectType) {
     return new Promise(async (resolve, reject) => {
-      if (!this.signaling || !this.signaling.client || !this.signaling.client.connected) {
+      if (!this.anyConnected()) {
         reject(new Error('未连接到手机'))
         return
       }
@@ -213,9 +233,9 @@ export class SyncClient {
     return this.request({ type: 'fetch_day', day }, 'day')
   }
 
-  /** 上层发起请求的前置条件：信令已连接且对端已知（不要求 connected，后者要等首个回包） */
+  /** 上层发起请求的前置条件：任一 broker 已连接且对端已知（不要求 connected，后者要等首个回包） */
   ready() {
-    return !!(this.signaling && this.signaling.client && this.signaling.client.connected && this.androidPeerId)
+    return !!(this.anyConnected() && this.androidPeerId)
   }
 
   add(payload) {
@@ -275,10 +295,8 @@ export class SyncClient {
     clearTimeout(this.watchdogTimer)
     this.stopHeartbeat()
     this.teardownPending()
-    if (this.signaling) {
-      this.signaling.close()
-      this.signaling = null
-    }
+    for (const s of this.signallings) s.close()
+    this.signallings = []
     this.setStatus('idle')
   }
 }

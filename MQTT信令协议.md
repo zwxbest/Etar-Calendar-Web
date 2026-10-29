@@ -14,7 +14,7 @@ MQTT 上的信令协议（主题划分、join/here/leave/signal 报文）怎么�
 
 | | 安卓（Paho） | 网页（mqtt.js） |
 |---|---|---|
-| 地址 | `ssl://broker-cn.emqx.io:8883`（EMQX 国内公共节点） | `wss://broker-cn.emqx.io:8084/mqtt` |
+| 地址 | `ssl://broker-cn.emqx.io:8883`（v4 起固定国内节点） | `wss://broker-cn.emqx.io:8084/mqtt` + `wss://broker.emqx.io:8084/mqtt` **双节点并行**（v4：任一可达即连通，兼容新旧手机 APK 写死的单一 broker，抗单节点故障；请求双发、安卓按请求 id 去重） |
 | cleanSession | `true` | `true` |
 | keepAlive | 30s | 30s（mqtt.js 默认） |
 | 自动重连 | Paho `automaticReconnect` | `reconnectPeriod` 指数退避 2s→30s |
