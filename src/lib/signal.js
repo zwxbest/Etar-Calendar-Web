@@ -70,6 +70,7 @@ export class Signaling {
     if (this.closedByUser) return
     this.pubTopic = 'etar/cal/' + room + '/' + ROLE
     this.subTopic = 'etar/cal/' + room + '/android'
+    console.info(`[signal] 连接 broker ${this.url}，房间 ${room}，本端 peerId=${peerId}`)
     this.open()
   }
 
@@ -137,6 +138,8 @@ export class Signaling {
     const peer = msg.peerId || msg.from
     // 一对一：只认安卓端，其他订阅者发的一律丢弃（协议 §6）
     if (typeof peer !== 'string' || !peer.startsWith('android-')) return
+    const brief = msg.type === 'signal' && msg.data ? `(${msg.data.kind})` : ''
+    console.info(`[signal] 收到 ${msg.type}${brief} from ${peer}`)
 
     switch (msg.type) {
       case 'join':
@@ -178,6 +181,7 @@ export class Signaling {
     if (this.closedByUser || this.reconnectTimer) return
     const delay = this.reconnectDelay
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX)
+    console.warn(`[signal] 连接断开，${delay / 1000}s 后重连（第 ${Math.round(Math.log2(delay / RECONNECT_BASE)) + 1} 次退避）`)
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       if (this.closedByUser || !this.client) return

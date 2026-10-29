@@ -72,12 +72,19 @@ export class RtcLink {
     this.pc = pc
     pc.onicecandidate = (ev) => {
       if (ev.candidate && this.remotePeerId) {
+        const c = ev.candidate.candidate
+        const typ = / typ (\w+)/.exec(c)?.[1] || '?'
+        console.info(`[rtc] ICE 候选(${typ}): ${c.slice(0, 60)}`)
         this.onSignal(this.remotePeerId, { kind: 'ice', candidate: ev.candidate })
       }
     }
     pc.onconnectionstatechange = () => {
+      console.info(`[rtc] connectionState=${pc.connectionState}`)
       const s = pc.connectionState
       if (s === 'failed' || s === 'closed') this.handleClose()
+    }
+    pc.oniceconnectionstatechange = () => {
+      console.info(`[rtc] iceConnectionState=${pc.iceConnectionState}`)
     }
     pc.ondatachannel = (ev) => this.bindChannel(ev.channel)
     return pc
@@ -86,10 +93,17 @@ export class RtcLink {
   bindChannel(channel) {
     this.channel = channel
     channel.onopen = () => {
+      console.info(`[rtc] DataChannel "${channel.label}" 已打开`)
       if (!this.closed) this.onOpen()
     }
-    channel.onclose = () => this.handleClose()
-    channel.onerror = () => this.handleClose()
+    channel.onclose = () => {
+      console.warn(`[rtc] DataChannel "${channel.label}" 已关闭`)
+      this.handleClose()
+    }
+    channel.onerror = (e) => {
+      console.warn('[rtc] DataChannel 错误:', e && e.message)
+      this.handleClose()
+    }
     channel.onmessage = (ev) => this.onData(ev.data)
     // 已经 open 的情况（极少见）
     if (channel.readyState === 'open') this.onOpen()
@@ -106,6 +120,7 @@ export class RtcLink {
     // 必须发 sdp 字符串：直接发 pc.localDescription 会被 JSON.stringify
     // 序列化成 {type,sdp} 对象，安卓端 optString("sdp") 拿到整个对象的
     // JSON 文本，setRemoteDescription 直接失败，永远不会有 answer 回来
+    console.info(`[rtc] 发送 offer（sdp ${pc.localDescription.sdp.length} 字符）`)
     this.onSignal(remotePeerId, { kind: 'offer', sdp: pc.localDescription.sdp })
   }
 
@@ -114,14 +129,17 @@ export class RtcLink {
     this.remotePeerId = from
     const pc = this.createPeer()
     if (data.kind === 'offer') {
+      console.info(`[rtc] 收到 offer（sdp ${String(data.sdp || '').length} 字符），应答 answer`)
       await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }))
       await this.flushCandidates()
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
       // 同 start()：只发 sdp 字符串，发整个 SessionDescription 对象
       // 会被序列化成 {type,sdp}，对端 optString("sdp") 拿到的是 JSON 文本
+      console.info(`[rtc] 发送 answer（sdp ${pc.localDescription.sdp.length} 字符）`)
       this.onSignal(from, { kind: 'answer', sdp: pc.localDescription.sdp })
     } else if (data.kind === 'answer') {
+      console.info(`[rtc] 收到 answer（sdp ${String(data.sdp || '').length} 字符）`)
       await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }))
       await this.flushCandidates()
     } else if (data.kind === 'ice' && data.candidate) {

@@ -32,6 +32,7 @@ export class SyncClient {
     this.pending = new Map() // id -> {resolve, reject, timer}
     this.reqSeq = 0
     this.heartbeatTimer = null
+    this.watchdogTimer = null
     this.handlers = { status: [], push: [], message: [] }
     this.wantConnection = false
   }
@@ -48,9 +49,28 @@ export class SyncClient {
 
   setStatus(status) {
     if (this.status !== status) {
+      console.info(`[sync] 状态 ${this.status} → ${status}`)
       this.status = status
       this.emit('status', status)
+      this.watchdog(status)
     }
+  }
+
+  /** 停在 connecting 超过 10s 就打印诊断信息，方便定位卡在哪一环 */
+  watchdog(status) {
+    clearTimeout(this.watchdogTimer)
+    if (status !== 'connecting') return
+    this.watchdogTimer = setTimeout(() => {
+      if (this.status !== 'connecting') return
+      const mqtt = this.signaling && this.signaling.client ? (this.signaling.client.connected ? '已连接' : '连接中') : '未启动'
+      const rtcDesc = this.rtc
+        ? `channel=${this.rtc.channel ? this.rtc.channel.readyState : '未建立'}, pc=${this.rtc.pc ? this.rtc.pc.connectionState : '未建立'}`
+        : '未建立'
+      console.warn(
+        `[sync] 已等待 10s 仍未连上手机：mqtt=${mqtt}，rtc=${rtcDesc}，对端=${this.androidPeerId || '未知'}。` +
+          '请确认：手机 Etar 前台服务在运行、配对码一致、双方网络可达',
+      )
+    }, 10000)
   }
 
   /**
@@ -78,10 +98,14 @@ export class SyncClient {
       const android = msg.peers.find((p) => p.startsWith('android-'))
       const target = this.androidPeerId || android
       if (msg.peers.length > 0 && target && msg.peers.includes(target)) {
+        console.info(`[sync] 手机在场（${target}），发起 RTC offer`)
         await this.startRtc(target)
+      } else if (msg.peers.length > 0) {
+        console.warn(`[sync] 房间里的手机 ${android} 与已记住的 ${this.androidPeerId} 不一致，忽略（换过手机需清除配对）`)
       }
     } else if (msg.type === 'peer-joined') {
       if (msg.peerId.startsWith('android-') && (!this.androidPeerId || this.androidPeerId === msg.peerId)) {
+        console.info(`[sync] 手机加入（${msg.peerId}），发起 RTC offer`)
         await this.startRtc(msg.peerId)
       }
     } else if (msg.type === 'signal') {
@@ -91,6 +115,7 @@ export class SyncClient {
     } else if (msg.type === 'peer-left') {
       // 一对一：陌生人发的 leave 不影响已配对的连接（协议 §6）
       if (this.androidPeerId && msg.peerId && msg.peerId !== this.androidPeerId) return
+      console.warn(`[sync] 手机已离线（${msg.peerId}）`)
       this.teardownRtc()
       this.setStatus(this.wantConnection ? 'connecting' : 'idle')
     } else if (msg.type === 'error') {
@@ -223,6 +248,7 @@ export class SyncClient {
 
   disconnect() {
     this.wantConnection = false
+    clearTimeout(this.watchdogTimer)
     this.teardownRtc()
     if (this.signaling) {
       this.signaling.close()
