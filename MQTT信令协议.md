@@ -127,7 +127,8 @@ DataChannel "sync" open → 配对完成
 ## 7. 安全性说明（如实评估）
 
 - **配对码即房间密钥**：6 位码 → hash 后做主题，遍历者无法从主题反推码，但理论上可 wildcard 订阅 `etar/cal/#` 看到所有房间的流量。缓解：主题用 hash 不裸奔码；泄露面仅限 **SDP/ICE**（含端侧 IP，浏览器侧 host 候选走 mDNS 掩码），**日程数据从不经过 MQTT**，它走 P2P DataChannel（DTLS-SRTP 加密）。这与原 Worker 方案的暴露面相同，没有变差。
-- 想再加一层可以后续把 `data` 用码派生的密钥对称加密，v1 不做，保持简单。
+  - ⚠️ 已过时：v2 起日程数据也经 MQTT 直连传输，但改为 **AES-256-GCM 加密**，见 §9；泄露面仍是密文。
+- 想再加一层可以后续把 `data` 用码派生的密钥对称加密，v1 不做，保持简单。（§9 已实现）
 
 ## 8. 与现有代码的映射（改动范围）
 
@@ -145,3 +146,46 @@ DataChannel "sync" open → 配对完成
 - **部署**：`signaling/` 整个目录作废删除，Cloudflare 上的 worker 可以直接删掉。
 
 协议就这样定。如果没异议，我按这个方案开始改两端代码，改完用你连着的手机 + Node 模拟网页端做一轮信令互通实测（join → here → offer → answer 全链路），再给你可部署的网页构建。
+
+---
+
+## 9. 数据通道 v2：MQTT 直连优先，60s 超时升级 WebRTC（2026-10-29）
+
+背景：联调发现 WebRTC 路径在对称 NAT / 无入站场景极易失败，而 MQTT（出站长连接）几乎总能通。
+新策略把"能同步"与"低延迟 P2P"解耦——**先保证数据能走，再追求走得好**。
+
+### 9.1 传输策略
+
+1. **第一优先：MQTT 数据直连**。信令连上、对端在场后，日程数据（fetch_day/add/update/delete/ping ↔ day/result/pong/push_change）
+   直接经现有两条角色主题以 `type="data"` 加密信封收发，**不等 WebRTC**。
+2. **60s 升级**：对端在场但 60s 内没有任何数据回包（`RTC_ESCALATE_MS`）→ 升级尝试 WebRTC DataChannel。
+   ICE 自身按候选类型顺序降级：host/IPv6 直连 → STUN srflx 打洞 → TURN relay 中继（§5 不变）。
+3. **回落**：DataChannel 打开后数据切到 P2P；RTC 断线时数据自动回落 MQTT，同步不断线。
+4. 两端均如此（升级动作只由网页端发起，安卓只应答）。
+
+### 9.2 `data` 信封
+
+```json
+{"v":1,"type":"data","from":"web-a1b2c3d4","ts":1793250000000,"d":"<base64>"}
+```
+
+`d` = `base64( iv(12B) || AES-256-GCM(明文JSON) || tag(16B) )`：
+
+- **key = SHA-256("etar-sync-data-v1:" + 配对码)**，两端各自派生（网页 `crypto.js`，安卓 `DataCrypto.kt`），密钥不过网
+- IV 每条消息随机 12B 前置；GCM tag 固定 128bit
+- base64 标准字母表带 padding（安卓侧 `Base64.NO_WRAP`）
+- 明文即 §9.1 列出的数据协议消息（含 `id`/`day`/`events` 等字段，与 DataChannel 上完全一致）
+
+### 9.3 可靠性
+
+- **幂等**：QoS1 在重连窗口可能重复投递。请求 id = `<sid>-<seq>`（sid 每次页面加载随机）；
+  安卓按 id 去重（LRU 128 条，`SyncService.replyCache`），重复请求直接重发缓存的响应。
+- **响应与请求通道无关**：网页按 id 配对响应，不看它从 MQTT 还是 DataChannel 回来；
+  安卓发送出口统一 `sendToWeb()`（RTC 优先，回落 MQTT）。
+- **兼容**：旧版对端收到 `type="data"` 走"未知类型忽略"分支 → 新网页 60s 后升级走旧 WebRTC 路径，双向兼容、无需同步发版。
+
+### 9.4 状态与 UI
+
+- 网页顶栏：`已连通·MQTT` / `已连通·P2P`（`sync.on('status', (s, transport))`）
+- 安卓通知：`网页已连接（MQTT 数据通道）` / `网页已连接（P2P）`
+- 控制台/配对页日志标注每条数据的来源通道 `[mqtt]` / `[rtc]`

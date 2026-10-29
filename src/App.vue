@@ -13,9 +13,11 @@ const sync = new SyncClient()
 
 const config = ref(loadConfig())
 const status = ref('idle') // idle | connecting | connected | offline
-const statusText = computed(
-  () => ({ idle: '未连接', connecting: '连接中', connected: '已连通', offline: '离线' })[status.value]
-)
+const transport = ref('mqtt') // 当前数据通道：mqtt 直连 | rtc P2P
+const statusText = computed(() => {
+  if (status.value === 'connected') return transport.value === 'rtc' ? '已连通·P2P' : '已连通·MQTT'
+  return ({ idle: '未连接', connecting: '连接中', offline: '离线' })[status.value]
+})
 const events = ref([])
 const currentDate = ref(todayStr())
 const selectedId = ref(null)
@@ -83,9 +85,17 @@ async function fetchDay() {
 }
 
 onMounted(() => {
-  sync.on('status', (s) => {
+  sync.on('status', (s, tr) => {
     status.value = s
-    if (s === 'connected') fetchDay()
+    if (tr) transport.value = tr
+    if (s === 'connected') {
+      // 配对成功（任一通道首通）后保存安卓 peerId，下次自动重连不用再输码
+      if (config.value && config.value.androidPeerId !== sync.androidPeerId) {
+        config.value.androidPeerId = sync.androidPeerId
+        saveConfig(config.value)
+      }
+      fetchDay()
+    }
   })
   sync.on('push', () => fetchDay())
   sync.on('rtc-open', () => {

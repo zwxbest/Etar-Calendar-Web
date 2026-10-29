@@ -1,5 +1,11 @@
-// 同步客户端：组合信令 + DataChannel，实现日程同步协议
+// 同步客户端：MQTT 数据直连优先，60s 无回包再升级 WebRTC DataChannel（协议 §9）
 //
+// 传输策略：
+//   1. 信令连接成功后，日程数据直接经 MQTT 加密信封（type="data"）收发，不等 WebRTC
+//   2. 对端在场但 60s 内没有任何数据回包 → 升级尝试 WebRTC（ICE 自身按 host/IPv6 → STUN → TURN 降级）
+//   3. DataChannel 打开后数据改走 P2P；RTC 断线时自动回落 MQTT（数据不断线）
+//
+// 数据协议（两条传输通道上完全一致）：
 // 网页 → 安卓：
 //   {"type":"fetch_day","day":"2026-10-28"}
 //   {"type":"add","payload":{...}}
@@ -12,7 +18,7 @@
 //   {"type":"push_change","payload":{}}       安卓本地变更，网页收到后刷新当前显示日
 //   {"type":"pong"}
 //
-// 状态机：idle(未配对) → signaling(连接中) → connected(已连通) → 离线自动回 signaling 重试
+// 状态机：idle(未配对) → connecting(连接中) → connected(已连通·MQTT|P2P) → 离线自动重试
 
 import { Signaling } from './signal.js'
 import { RtcLink } from './rtc.js'
@@ -20,17 +26,24 @@ import { loadOrCreatePeerId, DEFAULT_SIGNAL_URL } from './store.js'
 
 const HEARTBEAT_INTERVAL = 25000
 const RESPONSE_TIMEOUT = 15000
+// MQTT 数据无回包多久后升级 WebRTC（用户定义：1 分钟）
+const RTC_ESCALATE_MS = 60000
 
 export class SyncClient {
   constructor() {
     this.signaling = null
     this.rtc = null
     this.status = 'idle'
-    // 网页 peerId 持久化：安卓配对后只认这个 id，刷新不能变
+    // 网页 peerId 持久化：配对后安卓只认这个 id，刷新不能变
     this.myPeerId = loadOrCreatePeerId()
     this.androidPeerId = null
     this.pending = new Map() // id -> {resolve, reject, timer}
     this.reqSeq = 0
+    // 请求 id = <sid>-<seq>：sid 每次页面加载随机，防止与安卓侧去重缓存跨页面撞号
+    this.sid = Math.random().toString(16).slice(2, 6)
+    this.dataOk = false // 任一传输通道成功收发过数据
+    this.transport = null // 'mqtt' | 'rtc'，当前数据通道
+    this.escalateTimer = null
     this.heartbeatTimer = null
     this.watchdogTimer = null
     this.handlers = { status: [], push: [], message: [] }
@@ -47,13 +60,18 @@ export class SyncClient {
     for (const cb of this.handlers[type] || []) cb(...args)
   }
 
-  setStatus(status) {
+  /** 状态迁移；transport 标明当前数据通道（'mqtt' | 'rtc'）供 UI 显示 */
+  setStatus(status, transport) {
     if (this.status !== status) {
-      console.info(`[sync] 状态 ${this.status} → ${status}`)
+      console.info(`[sync] 状态 ${this.status} → ${status}${transport ? `（${transport}）` : ''}`)
       this.status = status
-      this.emit('status', status)
+      this.emit('status', status, transport || this.transport)
       this.watchdog(status)
+    } else if (transport && transport !== this.transport) {
+      // 已 connected 但通道切换（mqtt↔rtc），通知 UI 更新显示
+      this.emit('status', status, transport)
     }
+    if (transport) this.transport = transport
   }
 
   /** 停在 connecting 超过 10s 就打印诊断信息，方便定位卡在哪一环 */
@@ -65,7 +83,7 @@ export class SyncClient {
       const mqtt = this.signaling && this.signaling.client ? (this.signaling.client.connected ? '已连接' : '连接中') : '未启动'
       const rtcDesc = this.rtc
         ? `channel=${this.rtc.channel ? this.rtc.channel.readyState : '未建立'}, pc=${this.rtc.pc ? this.rtc.pc.connectionState : '未建立'}`
-        : '未建立'
+        : '未启动（MQTT 直连模式，60s 无回包会自动升级）'
       console.warn(
         `[sync] 已等待 10s 仍未连上手机：mqtt=${mqtt}，rtc=${rtcDesc}，对端=${this.androidPeerId || '未知'}。` +
           '请确认：手机 Etar 前台服务在运行、配对码一致、双方网络可达',
@@ -81,12 +99,22 @@ export class SyncClient {
     this.config = config
     this.androidPeerId = config.androidPeerId
     this.wantConnection = true
+    this.dataOk = false
+    this.transport = null
+    clearTimeout(this.escalateTimer)
+    this.escalateTimer = null
     this.teardownRtc()
     if (this.signaling) this.signaling.close()
     this.signaling = new Signaling(DEFAULT_SIGNAL_URL, `pair-${config.code}`)
     this.signaling.on('status', (s) => {
       if (s === 'connecting') this.setStatus('connecting')
-      if (s === 'closed') this.setStatus('offline')
+      if (s === 'closed') {
+        // 信令断开：数据状态作废，重连后由在场宣告重新评估是否升级 RTC
+        this.dataOk = false
+        clearTimeout(this.escalateTimer)
+        this.escalateTimer = null
+        this.setStatus('offline')
+      }
     })
     this.signaling.on('message', (msg) => this.onSignalingMessage(msg))
     this.signaling.connect(this.myPeerId)
@@ -98,16 +126,18 @@ export class SyncClient {
       const android = msg.peers.find((p) => p.startsWith('android-'))
       const target = this.androidPeerId || android
       if (msg.peers.length > 0 && target && msg.peers.includes(target)) {
-        console.info(`[sync] 手机在场（${target}），发起 RTC offer`)
-        await this.startRtc(target)
+        this.onPeerPresent(target)
       } else if (msg.peers.length > 0) {
         console.warn(`[sync] 房间里的手机 ${android} 与已记住的 ${this.androidPeerId} 不一致，忽略（换过手机需清除配对）`)
       }
     } else if (msg.type === 'peer-joined') {
       if (msg.peerId.startsWith('android-') && (!this.androidPeerId || this.androidPeerId === msg.peerId)) {
-        console.info(`[sync] 手机加入（${msg.peerId}），发起 RTC offer`)
-        await this.startRtc(msg.peerId)
+        this.onPeerPresent(msg.peerId)
       }
+    } else if (msg.type === 'data') {
+      // MQTT 数据直连（已解密），与 DataChannel 数据走同一入口
+      if (this.androidPeerId && msg.from !== this.androidPeerId) return
+      this.onData(msg.data, 'mqtt')
     } else if (msg.type === 'signal') {
       if (this.androidPeerId && msg.from !== this.androidPeerId) return
       if (!this.rtc) await this.startRtc(msg.from, true)
@@ -116,11 +146,37 @@ export class SyncClient {
       // 一对一：陌生人发的 leave 不影响已配对的连接（协议 §6）
       if (this.androidPeerId && msg.peerId && msg.peerId !== this.androidPeerId) return
       console.warn(`[sync] 手机已离线（${msg.peerId}）`)
+      this.dataOk = false
+      clearTimeout(this.escalateTimer)
+      this.escalateTimer = null
       this.teardownRtc()
       this.setStatus(this.wantConnection ? 'connecting' : 'idle')
     } else if (msg.type === 'error') {
       this.emit('message', msg.message)
     }
+  }
+
+  /** 对端在场：先走 MQTT 数据直连，60s 无回包再升级 WebRTC（协议 §9） */
+  onPeerPresent(peerId) {
+    if (this.androidPeerId !== peerId) this.androidPeerId = peerId
+    console.info(`[sync] 手机在场（${peerId}）：先用 MQTT 数据直连，${RTC_ESCALATE_MS / 1000}s 无回包再升级 WebRTC`)
+    this.armEscalation()
+  }
+
+  /** 布置 60s 升级定时器：已通数据或已在建 RTC 时不布置 */
+  armEscalation() {
+    if (this.dataOk || this.escalateTimer || this.rtc) return
+    if (!this.signaling || !this.signaling.client || !this.signaling.client.connected) return
+    this.escalateTimer = setTimeout(() => this.escalateToRtc(), RTC_ESCALATE_MS)
+    console.info(`[sync] 已布置 ${RTC_ESCALATE_MS / 1000}s WebRTC 升级定时器`)
+  }
+
+  escalateToRtc() {
+    this.escalateTimer = null
+    if (this.dataOk || this.rtc) return
+    if (!this.androidPeerId) return
+    console.warn('[sync] MQTT 数据 60s 无回包，升级尝试 WebRTC（ICE 依次试 host/IPv6 → STUN → TURN）')
+    this.startRtc(this.androidPeerId)
   }
 
   /** 发起（或被动应答式创建）RtcLink */
@@ -136,16 +192,25 @@ export class SyncClient {
     this.teardownRtc()
     const rtc = new RtcLink({
       onSignal: (to, data) => this.signaling.signal(to, data),
-      onData: (text) => this.onData(text),
+      onData: (text) => this.onData(text, 'rtc'),
       onOpen: () => {
-        this.setStatus('connected')
+        console.info('[sync] DataChannel 打开，数据通道切换为 P2P')
+        this.setStatus('connected', 'rtc')
         this.startHeartbeat()
         this.emit('rtc-open')
       },
       onClose: () => {
-        this.stopHeartbeat()
         this.teardownRtc()
-        if (this.wantConnection) this.setStatus('connecting')
+        const mqttAlive = this.signaling && this.signaling.client && this.signaling.client.connected
+        if (this.dataOk && mqttAlive) {
+          // RTC 断了但 MQTT 还活着：数据回落 MQTT，不断线
+          console.warn('[sync] RTC 断开，数据自动回落 MQTT 通道')
+          this.setStatus('connected', 'mqtt')
+        } else if (this.wantConnection) {
+          this.stopHeartbeat()
+          this.setStatus('connecting')
+          this.armEscalation() // peer 仍在场的话 60s 后重试
+        }
       },
     })
     this.rtc = rtc
@@ -155,15 +220,29 @@ export class SyncClient {
     }
   }
 
-  onData(text) {
+  /** 统一数据入口：MQTT（已解密对象）与 DataChannel（JSON 文本）汇合 */
+  onData(raw, via) {
     let msg
     try {
-      msg = JSON.parse(text)
+      msg = typeof raw === 'string' ? JSON.parse(raw) : raw
     } catch (e) {
       return
     }
+    // 任一通道成功收到数据 → 标记数据已通、取消 RTC 升级
+    const firstOk = !this.dataOk
+    this.dataOk = true
+    clearTimeout(this.escalateTimer)
+    this.escalateTimer = null
+    if (this.status !== 'connected') {
+      this.setStatus('connected', via)
+      this.startHeartbeat()
+    } else if (this.transport !== via) {
+      this.setStatus('connected', via)
+    } else {
+      this.transport = via
+    }
     if (msg.type === 'pong') return
-    console.info(`[sync] DataChannel 收到 ${msg.type}${msg.day ? `(${msg.day})` : ''}`)
+    console.info(`[sync] 收到 ${msg.type}${msg.day ? `(${msg.day})` : ''} [${via}]${firstOk ? '（数据通道首通）' : ''}`)
     if (msg.type === 'push_change') {
       this.emit('push', msg.payload || {})
       return
@@ -185,21 +264,37 @@ export class SyncClient {
     this.emit('message', msg)
   }
 
-  /** 发送请求并等待响应 */
+  /** 当前可用的数据发送通道：RTC 优先，回落 MQTT */
+  async sendObj(obj) {
+    if (this.rtc && this.rtc.channel && this.rtc.channel.readyState === 'open') {
+      return this.rtc.send(obj)
+    }
+    if (this.signaling) return this.signaling.sendData(obj)
+    return false
+  }
+
+  /** 发送请求并等待响应（两条通道透明，响应按 id 配对，与来源通道无关） */
   request(obj, expectType) {
-    return new Promise((resolve, reject) => {
-      if (!this.rtc || !this.rtc.channel || this.rtc.channel.readyState !== 'open') {
+    return new Promise(async (resolve, reject) => {
+      const canRtc = this.rtc && this.rtc.channel && this.rtc.channel.readyState === 'open'
+      const canMqtt = this.signaling && this.signaling.client && this.signaling.client.connected
+      if (!canRtc && !canMqtt) {
         reject(new Error('未连接到手机'))
         return
       }
-      const id = String(++this.reqSeq)
+      const id = `${this.sid}-${++this.reqSeq}`
       obj.id = id
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new Error('等待手机响应超时'))
       }, RESPONSE_TIMEOUT)
       this.pending.set(id, { resolve, reject, timer })
-      this.rtc.send(obj)
+      const sent = await this.sendObj(obj)
+      if (!sent) {
+        clearTimeout(timer)
+        this.pending.delete(id)
+        reject(new Error('发送失败'))
+      }
     })
   }
 
@@ -222,7 +317,7 @@ export class SyncClient {
   startHeartbeat() {
     this.stopHeartbeat()
     this.heartbeatTimer = setInterval(() => {
-      this.rtc && this.rtc.send({ type: 'ping' })
+      this.sendObj({ type: 'ping' })
     }, HEARTBEAT_INTERVAL)
   }
 
@@ -234,23 +329,27 @@ export class SyncClient {
   }
 
   teardownRtc() {
-    this.stopHeartbeat()
     if (this.rtc) {
       this.rtc.destroy()
       this.rtc = null
     }
-    // 超时未响应的请求直接失败
-    for (const [, p] of this.pending) {
-      clearTimeout(p.timer)
-      p.reject(new Error('连接已断开'))
-    }
-    this.pending.clear()
+    // 注意：不清理 pending —— 新设计下请求与通道无关（协议 §9），
+    // RTC 断开时 MQTT 可能仍会把响应送回来；真死掉的请求由各自的 15s 超时兜底
   }
 
   disconnect() {
     this.wantConnection = false
     clearTimeout(this.watchdogTimer)
+    clearTimeout(this.escalateTimer)
+    this.escalateTimer = null
     this.teardownRtc()
+    this.stopHeartbeat()
+    // 彻底断开：让所有等待中的请求立刻失败
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer)
+      p.reject(new Error('连接已断开'))
+    }
+    this.pending.clear()
     if (this.signaling) {
       this.signaling.close()
       this.signaling = null

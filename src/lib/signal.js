@@ -4,6 +4,7 @@
 // 对外接口保持不变：connect(peerId) / on('status'|'message') / signal(to, data) / close()
 
 import mqtt from 'mqtt'
+import { deriveDataKey, encryptJson, decryptJson } from './crypto.js'
 
 const RECONNECT_BASE = 2000
 const RECONNECT_MAX = 30000
@@ -39,6 +40,7 @@ export class Signaling {
     this.reconnectDelay = RECONNECT_BASE
     this.reconnectTimer = null
     this.peerLeftAt = 0 // 对端最近一次离开的时刻，用于丢弃过期信令
+    this.dataKey = null // 日程数据加密密钥（配对码派生，协议 §9）
     this.handlers = { message: [], status: [] }
   }
 
@@ -58,8 +60,9 @@ export class Signaling {
     this.reconnectDelay = RECONNECT_BASE
     this.emit('status', 'connecting')
     let room
+    let code
     try {
-      const code = this.roomId.startsWith('pair-') ? this.roomId.slice(5) : this.roomId
+      code = this.roomId.startsWith('pair-') ? this.roomId.slice(5) : this.roomId
       room = await deriveRoomHash(code)
     } catch (e) {
       // crypto.subtle 只在安全上下文可用
@@ -68,6 +71,7 @@ export class Signaling {
       return
     }
     if (this.closedByUser) return
+    this.dataKey = await deriveDataKey(code) // 日程数据加密密钥（协议 §9）
     this.pubTopic = 'etar/cal/' + room + '/' + ROLE
     this.subTopic = 'etar/cal/' + room + '/android'
     console.info(`[signal] 连接 broker ${this.url}，房间 ${room}，本端 peerId=${peerId}`)
@@ -161,6 +165,14 @@ export class Signaling {
         if (msg.ts && this.peerLeftAt && msg.ts < this.peerLeftAt) return
         this.emit('message', { type: 'signal', from: peer, data: msg.data })
         break
+      case 'data':
+        // 日程数据（加密信封，协议 §9）：解密后交给 sync.js（与 DataChannel 消息同一处理入口）
+        if (msg.ts && this.peerLeftAt && msg.ts < this.peerLeftAt) return
+        if (typeof msg.d !== 'string') return
+        decryptJson(this.dataKey, msg.d)
+          .then((plain) => this.emit('message', { type: 'data', from: peer, data: plain }))
+          .catch((e) => console.warn('[signal] 数据消息解密失败（配对码不一致或被篡改）:', e && e.message))
+        break
       default:
         // 未知类型忽略，协议演进时老客户端不报错
         break
@@ -193,6 +205,18 @@ export class Signaling {
   /** 转发信令给对端（to 仅为接口兼容保留：MQTT 下只有一条对端主题） */
   signal(to, data) {
     this.publish({ v: PROTOCOL_VERSION, type: 'signal', from: this.peerId, data, ts: Date.now() })
+  }
+
+  /** 日程数据直连（协议 §9）：加密后发布到自己的角色主题。返回是否已交给 broker */
+  async sendData(obj) {
+    if (!this.dataKey) return false
+    try {
+      const d = await encryptJson(this.dataKey, obj)
+      return this.publish({ v: PROTOCOL_VERSION, type: 'data', from: this.peerId, ts: Date.now(), d })
+    } catch (e) {
+      console.warn('[signal] 数据加密失败:', e && e.message)
+      return false
+    }
   }
 
   close() {
