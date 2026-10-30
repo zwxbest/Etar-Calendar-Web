@@ -47,9 +47,9 @@ const textColor = computed(() => {
 <style scoped>
 .event-block {
   position: absolute;
-  border: 1px solid rgba(0, 0, 0, 0.18);
-  padding: 2px 4px;
-  font-size: 12px;
+  border: 2px solid rgba(0, 0, 0, 0.18);
+  padding: 4px 8px;
+  font-size: 24px;
   font-weight: bold;
   overflow: hidden;
   cursor: pointer;
@@ -62,8 +62,8 @@ const textColor = computed(() => {
   position: static;
   display: inline-block;
   max-width: 100%;
-  height: 24px;
-  margin: 2px 2px;
+  height: 48px;
+  margin: 4px 4px;
   vertical-align: top;
 }
 

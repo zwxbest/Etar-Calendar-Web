@@ -117,16 +117,16 @@ function onDelete() {
 .seg {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 8px;
   flex: 1;
 }
 
 .seg-btn {
-  border: 1px solid var(--color-primary);
-  border-radius: 4px;
+  border: 2px solid var(--color-primary);
+  border-radius: 8px;
   color: var(--color-primary);
-  font-size: 13px;
-  padding: 5px 9px;
+  font-size: 26px;
+  padding: 10px 18px;
   background: #fff;
 }
 
@@ -136,9 +136,9 @@ function onDelete() {
 }
 
 .hint {
-  font-size: 12px;
+  font-size: 24px;
   color: var(--text-secondary);
-  margin-left: 72px;
+  margin-left: 144px;
 }
 
 .btn.danger {

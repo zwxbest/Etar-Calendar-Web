@@ -91,18 +91,18 @@ function closeOnOutside(ev) {
   position: fixed;
   z-index: 200;
   background: #fff;
-  border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  padding: 6px 0;
-  min-width: 150px;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  padding: 12px 0;
+  min-width: 300px;
 }
 
 .item {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 9px 18px;
-  font-size: 14px;
+  padding: 18px 36px;
+  font-size: 28px;
   color: var(--text-primary);
 }
 
@@ -115,8 +115,8 @@ function closeOnOutside(ev) {
 }
 
 .sub {
-  border-left: 2px solid var(--color-primary);
-  margin-left: 18px;
+  border-left: 4px solid var(--color-primary);
+  margin-left: 36px;
 }
 
 .arrow {

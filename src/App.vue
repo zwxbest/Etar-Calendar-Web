@@ -549,13 +549,13 @@ function closePair() {
 .quick-create-input {
   position: fixed;
   z-index: 100;
-  width: 260px;
-  padding: 10px 12px;
-  font-size: 15px;
-  border: 1px solid var(--color-primary);
-  border-radius: 8px;
+  width: 520px;
+  padding: 20px 24px;
+  font-size: 30px;
+  border: 2px solid var(--color-primary);
+  border-radius: 16px;
   background: #fff;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
   outline: none;
 }
 </style>

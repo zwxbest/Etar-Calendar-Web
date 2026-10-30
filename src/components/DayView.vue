@@ -12,8 +12,8 @@ const props = defineProps({
 })
 const emit = defineEmits(['event-click', 'event-ctx', 'event-dblclick', 'slot-click', 'ruler-dblclick'])
 
-const BASE_HOUR_HEIGHT = 64 // px，基准小时高度
-const MIN_EVENT_HEIGHT = 22
+const BASE_HOUR_HEIGHT = 128 // px，基准小时高度
+const MIN_EVENT_HEIGHT = 44
 const ZOOM_MIN = 0.4
 const ZOOM_MAX = 4 // 最大放大 4x（在 1x 基础上再放大两倍）
 
@@ -166,7 +166,7 @@ const layoutEvents = computed(() => {
 function onGridClick(ev) {
   const grid = gridEl.value
   const rect = grid.getBoundingClientRect()
-  const onRuler = ev.clientX - rect.left < 48 // 最左侧时间刻度列
+  const onRuler = ev.clientX - rect.left < 96 // 最左侧时间刻度列
   const t = ev.target
   const onGridArea =
     t === grid ||
@@ -289,14 +289,14 @@ function formatMinutes(colSpan) {
 .grid-inner {
   position: relative;
   min-height: 100%;
-  padding-left: 48px;
+  padding-left: 96px;
 }
 
 /* 事件层：绝对定位容器从时间刻度右侧开始，任务块按纯百分比排布，
-   列间只留 0.5em（半个字宽）的缝；此前每列都叠加 48px 刻度偏移导致间隔过宽 */
+   列间只留 0.5em（半个字宽）的缝；此前每列都叠加 96px 刻度偏移导致间隔过宽 */
 .events-layer {
   position: absolute;
-  left: 48px;
+  left: 96px;
   right: 0;
   top: 0;
   height: 100%;
@@ -305,19 +305,19 @@ function formatMinutes(colSpan) {
 
 .hour-line {
   position: absolute;
-  left: 48px;
+  left: 96px;
   right: 0;
-  height: 1px;
+  height: 2px;
   background: var(--grid-line);
 }
 
 .hour-label {
   position: absolute;
-  left: -48px;
-  top: -7px;
-  width: 44px;
+  left: -96px;
+  top: -14px;
+  width: 88px;
   text-align: right;
-  font-size: 12px;
+  font-size: 24px;
   color: var(--hour-label);
 }
 
@@ -325,16 +325,16 @@ function formatMinutes(colSpan) {
 .allday-row {
   position: relative;
   z-index: 3;
-  padding-left: 48px;
-  border-bottom: 1px solid var(--grid-line);
+  padding-left: 96px;
+  border-bottom: 2px solid var(--grid-line);
   background: #fff;
 }
 
 .now-line {
   position: absolute;
-  left: 44px;
+  left: 88px;
   right: 0;
-  height: 2px;
+  height: 4px;
   background: #b01b1b;
   z-index: 4;
   pointer-events: none;
@@ -344,9 +344,9 @@ function formatMinutes(colSpan) {
   content: '';
   position: absolute;
   left: 0;
-  top: -4px;
-  width: 10px;
-  height: 10px;
+  top: -8px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: #b01b1b;
 }
@@ -354,18 +354,18 @@ function formatMinutes(colSpan) {
 /* 定位到现在按钮：悬浮在网格右侧垂直居中，不随内容滚动 */
 .now-btn {
   position: absolute;
-  right: 14px;
+  right: 28px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 6;
-  padding: 12px 28px;
+  padding: 24px 56px;
   border-radius: 999px;
-  border: 1px solid var(--grid-line);
+  border: 2px solid var(--grid-line);
   background: #fff;
   color: var(--color-primary);
-  font-size: 26px;
+  font-size: 52px;
   font-weight: 500;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   cursor: pointer;
 }
 

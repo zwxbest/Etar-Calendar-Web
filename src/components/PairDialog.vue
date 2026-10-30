@@ -60,25 +60,25 @@ function connect() {
 
 <style scoped>
 .code-input {
-  letter-spacing: 4px;
-  font-size: 18px !important;
+  letter-spacing: 8px;
+  font-size: 36px !important;
 }
 
 .err {
   color: var(--danger);
-  font-size: 13px;
-  margin-left: 72px;
+  font-size: 26px;
+  margin-left: 144px;
 }
 
 .tip {
-  font-size: 12px;
+  font-size: 24px;
   color: var(--text-secondary);
   line-height: 1.6;
-  margin-top: 4px;
+  margin-top: 8px;
 }
 
 .actions {
   display: flex;
-  gap: 8px;
+  gap: 16px;
 }
 </style>

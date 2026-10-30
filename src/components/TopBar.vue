@@ -22,8 +22,8 @@ defineEmits(['prev', 'next', 'settings'])
 .top-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 16px 24px;
   background: var(--color-primary);
   color: #fff;
   flex-shrink: 0;
@@ -32,10 +32,10 @@ defineEmits(['prev', 'next', 'settings'])
 
 .nav-btn {
   color: #fff;
-  font-size: 26px;
+  font-size: 52px;
   line-height: 1;
-  width: 36px;
-  height: 36px;
+  width: 72px;
+  height: 72px;
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -45,7 +45,7 @@ defineEmits(['prev', 'next', 'settings'])
 }
 
 .date {
-  font-size: 16px;
+  font-size: 32px;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -57,9 +57,9 @@ defineEmits(['prev', 'next', 'settings'])
 }
 
 .status {
-  font-size: 12px;
-  padding: 3px 10px;
-  border-radius: 10px;
+  font-size: 24px;
+  padding: 6px 20px;
+  border-radius: 20px;
   background: rgba(255, 255, 255, 0.2);
   white-space: nowrap;
 }
@@ -75,11 +75,11 @@ defineEmits(['prev', 'next', 'settings'])
 
 .settings-btn {
   color: #fff;
-  font-size: 20px;
-  width: 32px;
-  height: 32px;
+  font-size: 40px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
-  margin-left: 6px;
+  margin-left: 12px;
   flex-shrink: 0;
 }
 

@@ -95,8 +95,8 @@ function submit() {
 .create-bar {
   flex-shrink: 0;
   background: #fff;
-  border-top: 1px solid #ddd;
-  padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+  border-top: 2px solid #ddd;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
   z-index: 10;
 }
 
@@ -108,11 +108,11 @@ function submit() {
 /* 优先级按钮：左上角圆角，复刻 bg_priority_medium / bg_priority_high */
 .priority-toggle {
   color: #fff;
-  font-size: 16px;
-  min-width: 44px;
-  padding: 0 6px;
+  font-size: 32px;
+  min-width: 88px;
+  padding: 0 12px;
   background: var(--color-primary);
-  border-radius: 8px 0 0 0;
+  border-radius: 16px 0 0 0;
 }
 
 .priority-toggle.high {
@@ -121,22 +121,22 @@ function submit() {
 
 .content-input {
   flex: 1;
-  border: 1px solid #ccc;
+  border: 2px solid #ccc;
   border-left: none;
   border-right: none;
-  padding: 12px;
-  font-size: 16px;
+  padding: 24px;
+  font-size: 32px;
   outline: none;
   min-width: 0;
 }
 
 .save-btn {
   color: var(--color-primary);
-  font-size: 20px;
-  padding: 0 12px;
+  font-size: 40px;
+  padding: 0 24px;
   background: var(--color-primary);
   color: #fff;
-  border-radius: 0 8px 0 0;
+  border-radius: 0 16px 0 0;
 }
 
 .save-btn:hover {
@@ -145,20 +145,20 @@ function submit() {
 
 .minute-row {
   display: flex;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 12px;
+  margin-top: 16px;
   flex-wrap: wrap;
 }
 
 /* 时长按钮：复刻 bg_minute_option，选中实心、未选描边 */
 .minute-btn {
   flex: 1;
-  min-width: 38px;
-  padding: 6px 0;
-  border: 1px solid var(--color-primary);
-  border-radius: 4px;
+  min-width: 76px;
+  padding: 12px 0;
+  border: 2px solid var(--color-primary);
+  border-radius: 8px;
   color: var(--color-primary);
-  font-size: 14px;
+  font-size: 28px;
   background: #fff;
 }
 
