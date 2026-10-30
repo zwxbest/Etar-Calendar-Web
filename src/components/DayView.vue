@@ -25,6 +25,8 @@ const gridEl = ref(null)
 const alldayEl = ref(null)
 const alldayH = ref(0) // 全天任务条实际高度：网格整体下移该距离，避免挡住 00:00/01:00
 const nowMinute = ref(new Date().getHours() * 60 + new Date().getMinutes())
+// 红线（当前时刻）是否在可视区域内：不在 → 按钮显示"现在"；在 → 变成"顶部"
+const nowInView = ref(false)
 let timer = null
 
 /** 测量全天条实际高度（任务换行时会变高） */
@@ -64,6 +66,24 @@ function scrollToNow() {
   grid.scrollTo({ top, behavior: 'smooth' })
 }
 
+/** 滚动条回到最顶部 */
+function scrollToTop() {
+  const grid = gridEl.value
+  if (!grid) return
+  grid.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+/** 红线（当前时刻）是否在视野内：内容坐标 = 线的位置（含全天条高度），与可视区间比对 */
+function updateNowInView() {
+  const grid = gridEl.value
+  if (!grid || !props.isToday) {
+    nowInView.value = false
+    return
+  }
+  const lineY = (nowMinute.value / 60) * HOUR_HEIGHT.value + alldayH.value
+  nowInView.value = lineY >= grid.scrollTop && lineY <= grid.scrollTop + grid.clientHeight
+}
+
 onMounted(() => {
   // 每 30 秒刷新当前时间线
   timer = setInterval(() => {
@@ -71,15 +91,21 @@ onMounted(() => {
     nowMinute.value = d.getHours() * 60 + d.getMinutes()
   }, 30000)
   window.addEventListener('wheel', onGlobalWheel, { passive: false, capture: true })
+  gridEl.value?.addEventListener('scroll', updateNowInView, { passive: true })
   measureAllday()
   // 打开时滚动到当前时间附近（今天）或 8 点（内容坐标含全天条高度）
   const target = props.isToday ? Math.max(nowMinute.value - 60, 0) : 8 * 60
   if (gridEl.value) gridEl.value.scrollTop = (target / 60) * HOUR_HEIGHT.value + alldayH.value
+  updateNowInView()
 })
+
+// 时间线/缩放/全天条高度变化后，红线位置会变，重新判断是否在视野内
+watch([nowMinute, zoom, alldayH], () => nextTick(updateNowInView))
 
 onBeforeUnmount(() => {
   clearInterval(timer)
   window.removeEventListener('wheel', onGlobalWheel, { capture: true })
+  gridEl.value?.removeEventListener('scroll', updateNowInView)
 })
 
 const alldayEvents = computed(() => props.events.filter((e) => e.allDay))
@@ -232,8 +258,16 @@ function formatMinutes(colSpan) {
       </div>
     </div>
 
-    <!-- 定位到现在：滚动到红线（当前时刻）居中 -->
-    <button v-if="isToday" class="now-btn" title="定位到现在" @click.stop="scrollToNow">现在</button>
+    <!-- 定位到现在：红线不在视野内时显示"现在"（点击滚动到红线居中）；
+         红线已在视野内时变成"顶部"（点击滚动条回到最顶部） -->
+    <button
+      v-if="isToday"
+      class="now-btn"
+      :title="nowInView ? '回到顶部' : '定位到现在'"
+      @click.stop="nowInView ? scrollToTop() : scrollToNow()"
+    >
+      {{ nowInView ? '顶部' : '现在' }}
+    </button>
   </div>
 </template>
 
