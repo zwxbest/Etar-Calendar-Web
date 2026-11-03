@@ -323,13 +323,37 @@ function onEventClick(event) {
   moveBefore(selectedId.value, event)
 }
 
-// 单击空白时段/时间刻度：取消选中（撤销移动意图），并切换创建目标时段；
+// 单击空白时段/时间刻度：有选中任务（移动意图）→ 把它移到该时段；
+// 无选中 → 取消选中（撤销移动意图），并切换创建目标时段；
 // 点最左侧时间刻度时，该时段创建的任务插到第一位（firstInSlot）
 function onSlotClick(minuteOffset, fromRuler) {
   ctxMenu.value = null
+  const movingId = selectedId.value
   selectedId.value = null
   createSlot.value = minuteOffset
   createAtFront.value = !!fromRuler
+  if (movingId == null) return
+  const ev = events.value.find((e) => e.id === movingId)
+  if (ev && !ev.allDay) moveToSlot(ev, minuteOffset)
+}
+
+/** 把任务移到目标 30 分钟时段：只平移起止时间，时长、宽度(colSpan)等参数一律不变 */
+function moveToSlot(ev, minuteOffset) {
+  const start = slotStartMillis(currentDate.value, minuteOffset)
+  if (slotStartOf(ev.start) === start) return // 已在该时段，无需动
+  const end = start + (ev.end - ev.start)
+  // 换了时段，旧的"排到某任务前面"展示提示已失效，清掉避免回迁时误用
+  const next = { ...orderHint.value }
+  if (next[ev.id] != null) {
+    delete next[ev.id]
+    orderHint.value = next
+    saveOrderHint(next)
+  }
+  doAction(
+    () => sync.update(ev.id, { start, end }),
+    '已移动到该时段',
+    () => applyLocal(ev.id, { start, end }),
+  )
 }
 
 /** 移动任务到锚点任务前面：时间/时段同步给手机；时段内先后顺序为网页端展示规则 */
