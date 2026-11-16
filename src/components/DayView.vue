@@ -9,6 +9,8 @@ const props = defineProps({
   createSlot: Number,
   // 网页端展示顺序提示：{ [被移动任务id]: 锚点任务id } 表示"排到锚点前面"（纯前端规则，不落手机库）
   orderHint: { type: Object, default: () => ({}) },
+  // 没有本地基准且连不上手机时的占位文案（空串 = 不显示）
+  unsyncedText: { type: String, default: '' },
 })
 const emit = defineEmits(['event-click', 'event-ctx', 'event-dblclick', 'slot-click', 'ruler-dblclick'])
 
@@ -258,6 +260,10 @@ function formatMinutes(colSpan) {
       </div>
     </div>
 
+    <!-- 未同步占位：没有本地基准、又连不上手机时必须显示，
+         绝不能让这一天看起来像"这天没任务" -->
+    <div v-if="unsyncedText" class="unsynced-notice">{{ unsyncedText }}</div>
+
     <!-- 定位到现在：红线不在视野内时显示"现在"（点击滚动到红线居中）；
          红线已在视野内时变成"顶部"（点击滚动条回到最顶部） -->
     <button
@@ -372,5 +378,22 @@ function formatMinutes(colSpan) {
 .now-btn:hover {
   background: var(--color-primary);
   color: #fff;
+}
+
+/* 未同步占位：悬浮在视区中部的提示条（不挡交互） */
+.unsynced-notice {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  padding: 24px 48px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 36px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
 }
 </style>

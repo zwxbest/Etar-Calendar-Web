@@ -8,12 +8,14 @@
 // 网页 → 安卓：
 //   {"type":"fetch_day","day":"2026-10-28"}
 //   {"type":"add","payload":{...}}
-//   {"type":"update","id":"123","payload":{...}}
-//   {"type":"delete","id":"123"}
+//   {"type":"update","eventId":"123","payload":{...}}
+//   {"type":"delete","eventId":"123"}
+//   {"type":"batch","id":"<uuid>","ops":[{type:add|update|delete,...}]}   离线改动批量上行（协议 §10）
 //   {"type":"ping"}
 // 安卓 → 网页：
 //   {"type":"day","day":"...","events":[...]}
 //   {"type":"result","ok":true|false,"action":"...","error":"..."}
+//        action:"batch" 时为整批结果 {"type":"result","action":"batch","ok":true,"total":N,"id":"<同一个id>"}
 //   {"type":"push_change","payload":{}}       安卓本地变更，网页收到后刷新当前显示日
 //   {"type":"pong"}
 //
@@ -188,7 +190,13 @@ export class SyncClient {
       clearTimeout(p.timer)
       if (msg.type === 'result') {
         if (msg.ok) p.resolve(msg)
-        else p.reject(new Error(msg.error || '操作失败'))
+        else {
+          // 手机端业务拒绝（ok:false）：打标记，让上层能和"超时/断连"区分开——
+          // batch 整批被拒要丢弃不重试，超时则要保留队列等重连同 id 补发
+          const err = new Error(msg.error || '操作失败')
+          err.remoteRejected = true
+          p.reject(err)
+        }
       } else if (msg.type === 'day') {
         p.resolve(msg.events || [])
       }
@@ -206,14 +214,15 @@ export class SyncClient {
     return results.some(Boolean)
   }
 
-  /** 发送请求并等待响应（按 id 配对） */
+  /** 发送请求并等待响应（按 id 配对）。
+   *  调用方可自带 id（如 batch 的整批幂等 id）——自带时不覆盖，否则生成 <sid>-<seq> 请求号 */
   request(obj, expectType) {
     return new Promise(async (resolve, reject) => {
       if (!this.anyConnected()) {
         reject(new Error('未连接到手机'))
         return
       }
-      const id = `${this.sid}-${++this.reqSeq}`
+      const id = obj.id != null ? String(obj.id) : `${this.sid}-${++this.reqSeq}`
       obj.id = id
       const timer = setTimeout(() => {
         this.pending.delete(id)
@@ -243,13 +252,20 @@ export class SyncClient {
   }
 
   update(id, payload) {
-    // 任务 id 用独立字段 eventId：request() 会统一给 obj.id 盖请求关联号，
+    // 任务 id 用独立字段 eventId：obj.id 是请求关联号（调用方没自带时由 request 生成），
     // 之前复用 id 字段导致安卓端拿到的是 "sid-1" 之类无法解析的值（delete/update 一直失败）
     return this.request({ type: 'update', eventId: String(id), payload })
   }
 
   remove(id) {
     return this.request({ type: 'delete', eventId: String(id) })
+  }
+
+  /** 批量改动上行（离线队列 flush，协议 §10）：
+   *  ops 按顺序执行、整批一次应答；batchId 是整批幂等 id（等待响应期间必须稳定，
+   *  超时/断连后用同一个 id 原样重发，安卓按 id 回缓存响应不重复执行） */
+  batch(batchId, ops) {
+    return this.request({ type: 'batch', id: String(batchId), ops })
   }
 
   /** 心跳：周期 ping 保活 + 看门狗监测入站数据，90s 无回包判定通道死亡 */

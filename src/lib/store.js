@@ -1,5 +1,7 @@
 // 配置持久化：配对码 + 安卓 peerId + 网页 peerId，保存在 localStorage
-// 网页不持久保存日程，日程一律实时从安卓拉取
+// 日程的离线缓存（当天基准 / 待同步队列 / 在途批次）在 lib/cache.js，
+// 展示顺序提示（etar_web_order_hint）也在本文件——网页端只是"本地操作层 + 缓存"，
+// 数据权威始终是手机本地库
 
 // 信令服务器（MQTT broker）地址固定内置，用户无需配置，见 MQTT信令协议.md §1
 // 双节点同时在线（§9 v4）：网页同时连国内+国际节点，任一可达即连通。
@@ -23,7 +25,11 @@ export function loadConfig() {
 }
 
 export function saveConfig(config) {
-  localStorage.setItem(KEY, JSON.stringify(config))
+  try {
+    localStorage.setItem(KEY, JSON.stringify(config))
+  } catch (e) {
+    /* 隐私模式/配额超限：本轮不持久化，下次打开需重新输码（不打断使用） */
+  }
 }
 
 export function clearConfig() {
