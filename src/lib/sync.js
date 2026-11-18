@@ -2,7 +2,7 @@
 //
 // 策略：信令连上、对端在场后，日程数据直接经 MQTT 加密信封（type="data"）收发。
 // WebRTC/ICE 路径已整体移除（v3）：NAT 穿透复杂度换来的收益不抵维护成本，
-// 公共 broker 的出站长连接在各类网络环境下都稳定可用。
+// 局域网自建 broker 的出站长连接在各类网络环境下都稳定可用。
 //
 // 数据协议：
 // 网页 → 安卓：
@@ -33,7 +33,7 @@ const DEAD_CHECK_INTERVAL = 30000
 
 export class SyncClient {
   constructor() {
-    // 双 broker 连接（国内 + 国际节点）：任一可达即连通，兼容写死单一 broker 的新旧手机 APK
+    // broker 连接列表：目前只有一个局域网 broker（SIGNAL_URLS），仍按数组处理便于加节点
     this.signallings = []
     this.status = 'idle'
     // 网页 peerId 持久化：配对后安卓只认这个 id，刷新不能变
@@ -75,7 +75,7 @@ export class SyncClient {
     return this.signallings.some((s) => s && s.client && s.client.connected)
   }
 
-  /** 双 broker 状态合并：任一路连上就算可用；全断才 offline */
+  /** 多 broker 状态合并：任一路连上就算可用；全断才 offline */
   recomputeStatus() {
     if (this.signallings.length === 0) return
     if (this.anyConnected()) {
@@ -110,7 +110,7 @@ export class SyncClient {
     this.lastInboundAt = 0
     this.teardownPending()
     for (const s of this.signallings) s.close()
-    // 双 broker 并行：旧手机 APK 写死 broker.emqx.io、新包写死 broker-cn，两边都连保证都能配对
+    // 局域网 EMQX（Android 走 tcp 1883、网页走 ws 8083，同一套主题）
     this.signallings = SIGNAL_URLS.map((url) => {
       const s = new Signaling(url, `pair-${config.code}`)
       s.on('status', () => this.recomputeStatus())
@@ -206,7 +206,7 @@ export class SyncClient {
   }
 
   /** 发送数据（唯一通道：MQTT 加密信封）。在所有已连通的 broker 上同时发——
-   *  手机只在其中一个 broker 上，另一条路的重复投递由安卓按请求 id 去重 */
+   *  多节点时手机只在其中一条路上，另一条路的重复投递由安卓按请求 id 去重 */
   async send(obj) {
     const conns = this.signallings.filter((s) => s && s.client && s.client.connected)
     if (conns.length === 0) return false

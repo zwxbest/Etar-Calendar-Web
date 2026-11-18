@@ -4,7 +4,7 @@ import { createHash } from 'crypto'
 import { deriveDataKey, encryptJson, decryptJson } from './src/lib/crypto.js'
 
 const code = process.argv[2] || '734521'
-const BROKER = process.argv[3] || 'wss://broker.emqx.io:8084/mqtt'
+const BROKER = process.argv[3] || 'ws://192.168.96.58:8083/mqtt'
 const token = createHash('sha256').update(`etar-sync-v1:${code}`).digest('hex').slice(0, 16)
 const pub = `etar/cal/${token}/android`
 const sub = `etar/cal/${token}/web`

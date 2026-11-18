@@ -18,17 +18,16 @@ Vue 3 + Vite 实现的 Etar 日历网页端，复刻 App 的**天视图**：
   会随下一次 fetch 自动回退。localStorage 不可用时降级为纯内存（一次性 toast 提示），
   另有 7 天前的基准自动清理
 - 配对：首次打开输入 6 位配对码连接手机；配对成功后 localStorage 记住手机
-  peerId，下次打开自动重连。信令地址内置（`src/lib/store.js` 的 `DEFAULT_SIGNAL_URL`），
+  peerId，下次打开自动重连。信令地址内置（`src/lib/store.js` 的 `SIGNAL_URLS`），
   弹窗里无需配置
 
 ## 底层
 
-- 数据通道：WebRTC DataChannel（纯数据，无音视频）。ICE 按候选类型自动优先：
-  内网/IPv6 直连 → STUN 打洞（UDP）→ TURN 中继兜底（UDP 80 / TCP 443 / TLS 443，
-  Open Relay 公共服务，凭据在 `src/lib/rtc.js`，可换自建 coturn）。绝大多数情况仍走 P2P
-- 信令：MQTT，公共 broker `broker.emqx.io`（网页 wss 8084 / 安卓 ssl 8883），
-  只交换 SDP/ICE，主题划分与 join/here/leave/signal 报文见 `MQTT信令协议.md`；
-  原 `../signaling/` Worker 已作废
+- 数据通道：MQTT（局域网自建 EMQX，`192.168.96.58`）。网页只连 broker，
+  日程数据经加密信封（`type="data"`）收发，主题划分与 join/here/leave/data 报文见
+  `MQTT信令协议.md`；原 `../signaling/` Worker 已作废
+- 信令地址：网页 `ws://192.168.96.58:8083/mqtt`，安卓 `tcp://192.168.96.58:1883`；
+  断线后两端都按**固定 1 秒**间隔重连（不做指数退避）
 - 依赖 `mqtt`（mqtt.js），首次拉代码需 `npm install`
 
 ## 开发/构建

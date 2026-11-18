@@ -1,15 +1,14 @@
 // MQTT 客户端：协议见 MQTT信令协议.md
-// 用公共 broker 的 pub/sub 完成对端发现（join/here/leave）与加密数据传输（data），
+// 用局域网 MQTT broker 的 pub/sub 完成对端发现（join/here/leave）与加密数据传输（data），
 //   只往自己的角色主题发布、只订阅对端的角色主题，主题本身完成寻址
 // 对外接口：connect(peerId) / on('status'|'message') / sendData(obj) / close()
 
 import mqtt from 'mqtt'
 import { deriveDataKey, encryptJson, decryptJson } from './crypto.js'
 
-const RECONNECT_BASE = 2000
-const RECONNECT_MAX = 30000
+const RECONNECT_DELAY = 1000 // 断线后固定每 1s 重连一次，不做指数退避
 const KEEPALIVE = 30
-const CONNECT_TIMEOUT = 10000
+const CONNECT_TIMEOUT = 3000 // 局域网 broker，连接超时放短，配合 1s 固定重试
 const PROTOCOL_VERSION = 1
 const ROLE = 'web' // 本端角色主题；对端是 android
 
@@ -37,7 +36,6 @@ export class Signaling {
     this.pubTopic = null // 自己发布：etar/cal/<T>/web
     this.subTopic = null // 对端发布：etar/cal/<T>/android
     this.closedByUser = false
-    this.reconnectDelay = RECONNECT_BASE
     this.reconnectTimer = null
     this.peerLeftAt = 0 // 对端最近一次离开的时刻，用于丢弃过期信令
     this.dataKey = null // 日程数据加密密钥（配对码派生，协议 §9）
@@ -57,7 +55,6 @@ export class Signaling {
   async connect(peerId) {
     this.peerId = peerId
     this.closedByUser = false
-    this.reconnectDelay = RECONNECT_BASE
     this.emit('status', 'connecting')
     let room
     let code
@@ -87,7 +84,7 @@ export class Signaling {
       clean: true,
       keepalive: KEEPALIVE,
       connectTimeout: CONNECT_TIMEOUT,
-      reconnectPeriod: 0, // 断线由本类自己按 2s→30s 指数退避重连
+      reconnectPeriod: 0, // 断线由本类自己固定 1s 重连
       resubscribe: false, // 每次连上都重新订阅（reconnectPeriod=0 时 mqtt.js 不记订阅表）
       queueQoSZero: false,
       will: {
@@ -102,7 +99,6 @@ export class Signaling {
 
     client.on('connect', () => {
       if (this.client !== client) return
-      this.reconnectDelay = RECONNECT_BASE
       // 先订阅对端主题、拿到 SUBACK 再宣告在线，避免错过对方的 here（协议 §4 时序）
       client.subscribe(this.subTopic, { qos: 1 }, (err) => {
         if (this.client !== client) return
@@ -189,15 +185,13 @@ export class Signaling {
 
   scheduleReconnect() {
     if (this.closedByUser || this.reconnectTimer) return
-    const delay = this.reconnectDelay
-    this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX)
-    console.warn(`[signal] 连接断开，${delay / 1000}s 后重连（第 ${Math.round(Math.log2(delay / RECONNECT_BASE)) + 1} 次退避）`)
+    console.warn('[signal] 连接断开，1s 后重连')
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       if (this.closedByUser || !this.client) return
       this.emit('status', 'connecting')
       this.client.reconnect()
-    }, delay)
+    }, RECONNECT_DELAY)
   }
 
   /** 日程数据直连（协议 §9）：加密后发布到自己的角色主题。返回是否已交给 broker */

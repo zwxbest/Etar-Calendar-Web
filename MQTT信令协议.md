@@ -14,10 +14,10 @@ MQTT 上的信令协议（主题划分、join/here/leave/signal 报文）怎么�
 
 | | 安卓（Paho） | 网页（mqtt.js） |
 |---|---|---|
-| 地址 | `ssl://broker-cn.emqx.io:8883`（v4 起固定国内节点） | `wss://broker-cn.emqx.io:8084/mqtt` + `wss://broker.emqx.io:8084/mqtt` **双节点并行**（v4：任一可达即连通，兼容新旧手机 APK 写死的单一 broker，抗单节点故障；请求双发、安卓按请求 id 去重） |
+| 地址 | `tcp://192.168.96.58:1883`（局域网自建 EMQX） | `ws://192.168.96.58:8083/mqtt`（同一台 broker） |
 | cleanSession | `true` | `true` |
 | keepAlive | 30s | 30s（mqtt.js 默认） |
-| 自动重连 | Paho `automaticReconnect` | `reconnectPeriod` 指数退避 2s→30s |
+| 自动重连 | 自行固定 1s 重建连接（关掉 Paho `automaticReconnect` 的退避） | 自行固定 1s `reconnect()`（`reconnectPeriod: 0`，不用 mqtt.js 的退避） |
 | clientId | `etar-a-<peerId>-<随机后缀>` | `etar-w-<peerId>-<随机后缀>` |
 | 发布 QoS | 1 | 1 |
 | retain | **一律不用** | **一律不用** |

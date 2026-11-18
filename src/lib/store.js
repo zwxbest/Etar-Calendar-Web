@@ -4,13 +4,8 @@
 // 数据权威始终是手机本地库
 
 // 信令服务器（MQTT broker）地址固定内置，用户无需配置，见 MQTT信令协议.md §1
-// 双节点同时在线（§9 v4）：网页同时连国内+国际节点，任一可达即连通。
-// 兼容不同版本手机 APK 写死的单一 broker（旧包 broker.emqx.io / 新包 broker-cn），
-// 同时抗单节点故障；请求在两条链路都发，安卓按请求 id 去重只处理一次。
-export const SIGNAL_URLS = [
-  'wss://broker-cn.emqx.io:8084/mqtt',
-  'wss://broker.emqx.io:8084/mqtt',
-]
+// 指向 192.168.96.58（TCP 1883 给安卓、WebSocket 8083 给网页），换机器时两端常量同步改。
+export const SIGNAL_URLS = ['ws://192.168.96.58:8083/mqtt']
 
 const KEY = 'etar_web_sync_config'
 const PEER_ID_KEY = 'etar_web_peer_id'
